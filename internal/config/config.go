@@ -8,24 +8,26 @@ import (
 
 // Config 存储应用配置
 type Config struct {
-	ListenAddr    string
-	SSHServer     string
-	SSHUser       string
-	SSHPassword   string
-	SSHKeyFile    string
-	SSHTargetDial string
-	Timeout       time.Duration
-	Verbose       bool
-	LogFile       string
+	ListenAddr      string
+	SSHServer       string
+	SSHUser         string
+	SSHPassword     string
+	SSHKeyFile      string
+	SSHTargetDial   string
+	Timeout         time.Duration
+	Verbose         bool
+	LogFile         string
+	InteractiveAuth bool
 }
 
 // NewConfig 创建默认配置
 func NewConfig() *Config {
 	return &Config{
-		ListenAddr: ":8080",
-		SSHServer:  "",
-		Timeout:    10 * time.Second,
-		Verbose:    false,
+		ListenAddr:      ":8080",
+		SSHServer:       "",
+		Timeout:         10 * time.Second,
+		Verbose:         false,
+		InteractiveAuth: true,
 	}
 }
 
@@ -54,7 +56,7 @@ func (c *Config) Validate() error {
 		return errors.New("必须提供SSH用户名")
 	}
 
-	if c.SSHPassword == "" && c.SSHKeyFile == "" {
+	if !c.InteractiveAuth && c.SSHPassword == "" && c.SSHKeyFile == "" {
 		return errors.New("必须提供SSH密码或私钥文件")
 	}
 

@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"fmt"
 	"net"
 	"os"
 
@@ -8,6 +9,7 @@ import (
 
 	"github.com/Sesame2/gotun/internal/config"
 	"github.com/Sesame2/gotun/internal/logger"
+	"github.com/Sesame2/gotun/internal/utils"
 )
 
 // SSHClient 管理SSH连接
@@ -22,12 +24,6 @@ func NewSSHClient(cfg *config.Config, log *logger.Logger) (*SSHClient, error) {
 	log.Infof("配置SSH客户端连接到 %s", cfg.SSHServer)
 
 	authMethods := []ssh.AuthMethod{}
-
-	// 添加密码认证
-	if cfg.SSHPassword != "" {
-		log.Debug("使用密码认证")
-		authMethods = append(authMethods, ssh.Password(cfg.SSHPassword))
-	}
 
 	// 添加私钥认证
 	if cfg.SSHKeyFile != "" {
@@ -46,6 +42,13 @@ func NewSSHClient(cfg *config.Config, log *logger.Logger) (*SSHClient, error) {
 
 		log.Debug("成功加载SSH私钥")
 		authMethods = append(authMethods, ssh.PublicKeys(signer))
+	} else {
+		password, err := utils.GetSSHPassword(cfg.SSHPassword, cfg.InteractiveAuth, cfg.SSHUser, cfg.SSHServer)
+		if err != nil {
+			return nil, fmt.Errorf("获取SSH密码失败：%v", err)
+		}
+		log.Debug("使用密码认证")
+		authMethods = append(authMethods, ssh.Password(password))
 	}
 
 	sshConfig := &ssh.ClientConfig{
