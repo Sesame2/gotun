@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"golang.org/x/crypto/ssh"
 
@@ -28,7 +30,17 @@ func NewSSHClient(cfg *config.Config, log *logger.Logger) (*SSHClient, error) {
 	// 添加私钥认证
 	if cfg.SSHKeyFile != "" {
 		log.Debugf("尝试从 %s 加载SSH私钥", cfg.SSHKeyFile)
-		key, err := os.ReadFile(cfg.SSHKeyFile)
+
+		// 展开波浪号路径
+		keyPath := cfg.SSHKeyFile
+		if strings.HasPrefix(keyPath, "~/") {
+			home, err := os.UserHomeDir()
+			if err == nil {
+				keyPath = filepath.Join(home, keyPath[2:])
+			}
+		}
+
+		key, err := os.ReadFile(keyPath)
 		if err != nil {
 			log.Errorf("读取SSH私钥失败: %v", err)
 			return nil, err
