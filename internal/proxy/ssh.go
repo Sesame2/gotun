@@ -1,13 +1,17 @@
 package proxy
 
 import (
+	"fmt"
 	"net"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"golang.org/x/crypto/ssh"
 
 	"github.com/Sesame2/gotun/internal/config"
 	"github.com/Sesame2/gotun/internal/logger"
+	"github.com/Sesame2/gotun/internal/utils"
 )
 
 // SSHClient 管理SSH连接
@@ -23,16 +27,20 @@ func NewSSHClient(cfg *config.Config, log *logger.Logger) (*SSHClient, error) {
 
 	authMethods := []ssh.AuthMethod{}
 
-	// 添加密码认证
-	if cfg.SSHPassword != "" {
-		log.Debug("使用密码认证")
-		authMethods = append(authMethods, ssh.Password(cfg.SSHPassword))
-	}
-
 	// 添加私钥认证
 	if cfg.SSHKeyFile != "" {
 		log.Debugf("尝试从 %s 加载SSH私钥", cfg.SSHKeyFile)
-		key, err := os.ReadFile(cfg.SSHKeyFile)
+
+		// 展开波浪号路径
+		keyPath := cfg.SSHKeyFile
+		if strings.HasPrefix(keyPath, "~/") {
+			home, err := os.UserHomeDir()
+			if err == nil {
+				keyPath = filepath.Join(home, keyPath[2:])
+			}
+		}
+
+		key, err := os.ReadFile(keyPath)
 		if err != nil {
 			log.Errorf("读取SSH私钥失败: %v", err)
 			return nil, err
@@ -46,6 +54,13 @@ func NewSSHClient(cfg *config.Config, log *logger.Logger) (*SSHClient, error) {
 
 		log.Debug("成功加载SSH私钥")
 		authMethods = append(authMethods, ssh.PublicKeys(signer))
+	} else {
+		password, err := utils.GetSSHPassword(cfg.SSHPassword, cfg.InteractiveAuth, cfg.SSHUser, cfg.SSHServer)
+		if err != nil {
+			return nil, fmt.Errorf("获取SSH密码失败：%v", err)
+		}
+		log.Debug("使用密码认证")
+		authMethods = append(authMethods, ssh.Password(password))
 	}
 
 	sshConfig := &ssh.ClientConfig{
