@@ -47,7 +47,12 @@ func (p *HTTPOverSSH) Start() error {
 	}
 
 	p.logger.Infof("HTTP/HTTPS 代理服务器启动在 %s", p.cfg.ListenAddr)
-	return p.server.ListenAndServe()
+	err := p.server.ListenAndServe()
+	// 正常关闭不应该被视为错误
+	if err == http.ErrServerClosed {
+		return nil
+	}
+	return err
 }
 
 // handleHTTP 处理HTTP请求
@@ -193,7 +198,7 @@ func (p *HTTPOverSSH) handleHTTPSConnect(w http.ResponseWriter, req *http.Reques
 	}
 	defer sshConn.Close()
 
-	// 获取底层的HTTP连接，这是实现HTTPS代理的关键
+	// 获取底层的HTTP连接
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		p.logger.Error("代理服务器不支持连接劫持")
