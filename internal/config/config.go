@@ -21,6 +21,8 @@ type Config struct {
 	Verbose         bool
 	LogFile         string
 	InteractiveAuth bool
+	SystemProxy     bool   // 是否启用系统代理
+	SystemProxyPac  string // PAC文件URL，如果需要
 }
 
 // NewConfig 创建默认配置
@@ -32,6 +34,8 @@ func NewConfig() *Config {
 		Timeout:         10 * time.Second,
 		Verbose:         false,
 		InteractiveAuth: true,
+		SystemProxy:     true,
+		SystemProxyPac:  "",
 	}
 }
 
@@ -70,6 +74,8 @@ func (c *Config) ParseFlags() {
 	flag.DurationVar(&c.Timeout, "timeout", c.Timeout, "连接超时时间")
 	flag.BoolVar(&c.Verbose, "v", c.Verbose, "启用详细日志")
 	flag.StringVar(&c.LogFile, "log", c.LogFile, "日志文件路径 (默认输出到标准输出)")
+	flag.BoolVar(&c.SystemProxy, "sys-proxy", c.SystemProxy, "自动设置系统代理")
+	flag.StringVar(&c.SystemProxyPac, "proxy-pac", c.SystemProxyPac, "代理自动配置(PAC)文件URL")
 
 	// 解析标准参数
 	flag.Parse()
