@@ -54,6 +54,13 @@ func main() {
 
 	// 初始化日志系统
 	log := logger.NewLogger(cfg.Verbose)
+	if cfg.LogFile != "" {
+		if err := log.SetLogFile(cfg.LogFile); err != nil {
+			fmt.Fprintf(os.Stderr, "设置日志文件失败: %v\n", err)
+			os.Exit(1)
+		}
+		log.Infof("日志将输出到文件: %s", cfg.LogFile)
+	}
 	log.Infof("GoTun %s 启动中...", Version)
 
 	// 创建并启动代理
