@@ -10,6 +10,7 @@ import (
 	"github.com/Sesame2/gotun/internal/config"
 	"github.com/Sesame2/gotun/internal/logger"
 	"github.com/Sesame2/gotun/internal/proxy"
+	"github.com/Sesame2/gotun/internal/sysproxy"
 )
 
 var (
@@ -28,6 +29,7 @@ func printUsage() {
 	fmt.Println("  gotun -p 2222 user@example.com         # 指定SSH端口")
 	fmt.Println("  gotun -i ~/.ssh/id_rsa user@example.com # 使用私钥认证")
 	fmt.Println("  gotun -listen :8888 user@example.com   # 自定义代理监听端口")
+	fmt.Println("  gotun -sys-proxy user@example.com      # 自动设置系统代理")
 }
 
 func main() {
@@ -40,47 +42,79 @@ func main() {
 
 	// 显示帮助
 	if len(os.Args) == 1 || (len(os.Args) == 2 && (os.Args[1] == "-h" || os.Args[1] == "--help")) {
-		printUsage()
-		return
+		flag.Usage()
+		os.Exit(0)
+	}
+
+	// 验证配置
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "配置错误: %v\n", err)
+		os.Exit(1)
 	}
 
 	// 初始化日志系统
 	log := logger.NewLogger(cfg.Verbose)
 	log.Infof("GoTun %s 启动中...", Version)
 
-	if err := cfg.Validate(); err != nil {
-		log.Errorf("配置验证失败: %v", err)
+	// 创建并启动代理
+	httpProxy, err := proxy.NewHTTPOverSSH(cfg, log)
+	if err != nil {
+		log.Errorf("代理初始化失败: %v", err)
 		os.Exit(1)
 	}
 
-	// 创建并启动代理
-	proxy, err := proxy.NewHTTPOverSSH(cfg, log)
-	if err != nil {
-		log.Errorf("创建代理失败: %v", err)
-		os.Exit(1)
+	// 创建系统代理管理器
+	var proxyMgr *sysproxy.Manager
+	if cfg.SystemProxy {
+		proxyMgr = sysproxy.NewManager(log, cfg.ListenAddr)
 	}
 
 	// 优雅退出处理
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
+	// 启动代理服务
 	go func() {
-		sig := <-sigChan
-		log.Infof("收到信号 %v, 正在关闭代理服务...", sig)
-		if err := proxy.Close(); err != nil {
-			log.Errorf("关闭代理时出错: %v", err)
+		// 如果启用了系统代理，设置它
+		if cfg.SystemProxy && proxyMgr != nil {
+			if err := proxyMgr.Enable(); err != nil {
+				log.Errorf("设置系统代理失败: %v", err)
+			} else {
+				log.Info("系统代理设置成功，已清除所有代理例外规则")
+			}
 		}
-		os.Exit(0)
+
+		// 启动HTTP代理
+		err := httpProxy.Start()
+		if err != nil {
+			log.Errorf("代理服务启动失败: %v", err)
+			sigChan <- syscall.SIGTERM // 触发关闭
+		}
 	}()
 
-	// 启动代理服务
-	log.Infof("HTTP代理正在监听: %s", cfg.ListenAddr)
-	fmt.Printf("\n代理服务已启动: http://%s\n", cfg.ListenAddr)
-	fmt.Printf("使用 %s@%s 作为SSH中继服务器\n", cfg.SSHUser, cfg.SSHServer)
+	// 显示连接信息
+	fmt.Println("\n代理服务已启动:", "http://"+cfg.ListenAddr)
+	fmt.Println("使用", cfg.SSHServer, "作为SSH中继服务器")
+	if cfg.SystemProxy {
+		fmt.Println("系统代理已启用，所有流量将通过代理")
+	}
 	fmt.Println("按 Ctrl+C 退出")
 
-	if err := proxy.Start(); err != nil {
-		log.Errorf("代理服务启动失败: %v", err)
-		os.Exit(1)
+	// 等待退出信号
+	<-sigChan
+	log.Info("收到信号, 正在关闭代理服务...")
+
+	// 清理系统代理设置
+	if cfg.SystemProxy && proxyMgr != nil {
+		if err := proxyMgr.Disable(); err != nil {
+			log.Errorf("恢复系统代理设置失败: %v", err)
+		} else {
+			log.Info("系统代理设置已恢复")
+		}
+	}
+
+	// 关闭代理
+	if err := httpProxy.Close(); err != nil {
+		log.Errorf("关闭代理服务失败: %v", err)
 	}
 }
