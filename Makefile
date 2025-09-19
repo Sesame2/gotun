@@ -1,7 +1,7 @@
 BINARY_NAME=gotun
-VERSION=0.1.0
+VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 BUILD_DIR=./build
-LDFLAGS=-ldflags "-X main.Version=$(VERSION)"
+LDFLAGS=-ldflags "-X main.Version=$(VERSION) -s -w"
 
 # Go命令
 GOCMD=go
@@ -16,7 +16,10 @@ GOLINT=golangci-lint
 GOOS=$(shell go env GOOS)
 GOARCH=$(shell go env GOARCH)
 
-.PHONY: all build clean test lint vet tidy run help
+# 发布平台和架构
+PLATFORMS=linux/amd64 linux/arm64 windows/amd64 windows/arm64 darwin/amd64 darwin/arm64
+
+.PHONY: all build clean test lint vet tidy run help build-all build-release
 
 all: lint test build
 
@@ -44,6 +47,43 @@ build-darwin:
 	@echo "Building for macOS..."
 	@mkdir -p $(BUILD_DIR)
 	@GOOS=darwin GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)_darwin_amd64 ./cmd/gotun.go
+
+# 发布构建 - 支持多架构
+build-release:
+	@echo "Building release for version: $(VERSION)"
+	@mkdir -p $(BUILD_DIR)
+	@for platform in $(PLATFORMS); do \
+	    os=$$(echo $$platform | cut -d'/' -f1); \
+	    arch=$$(echo $$platform | cut -d'/' -f2); \
+	    echo "Building $$os/$$arch..."; \
+	    if [ "$$os" = "windows" ]; then \
+	        GOOS=$$os GOARCH=$$arch $(GOBUILD) $(LDFLAGS) \
+	            -o $(BUILD_DIR)/$(BINARY_NAME)_$(VERSION)_$${os}_$${arch}.exe ./cmd/gotun.go; \
+	    else \
+	        GOOS=$$os GOARCH=$$arch $(GOBUILD) $(LDFLAGS) \
+	            -o $(BUILD_DIR)/$(BINARY_NAME)_$(VERSION)_$${os}_$${arch} ./cmd/gotun.go; \
+	    fi; \
+	done
+	@echo "Release build complete for version: $(VERSION)"
+	@echo "Built files:"
+	@ls -la $(BUILD_DIR)/$(BINARY_NAME)_$(VERSION)_*
+
+# 打包发布文件
+package-release: build-release
+	@echo "Packaging release files..."
+	@cd $(BUILD_DIR) && \
+	for file in $(BINARY_NAME)_$(VERSION)_*; do \
+	    if [ -f "$$file" ]; then \
+	        os_arch=$$(echo $$file | sed 's/$(BINARY_NAME)_$(VERSION)_//'); \
+	        if [[ "$$file" == *.exe ]]; then \
+	            zip "$$file.zip" "$$file"; \
+	        else \
+	            tar -czf "$$file.tar.gz" "$$file"; \
+	        fi; \
+	        echo "Packaged: $$file"; \
+	    fi; \
+	done
+	@echo "Packaging complete"
 
 # 清理构建文件
 clean:
@@ -80,15 +120,27 @@ tidy:
 run:
 	@$(GOCMD) run ./cmd/gotun.go
 
+# 显示版本信息
+version:
+	@echo "Current version: $(VERSION)"
+
 # 显示帮助信息
 help:
 	@echo "Make targets:"
-	@echo "  build      - Build gotun binary"
-	@echo "  build-all  - Build for multiple platforms"
-	@echo "  clean      - Remove build artifacts"
-	@echo "  test       - Run tests"
-	@echo "  lint       - Run linter"
-	@echo "  vet        - Run go vet"
-	@echo "  tidy       - Tidy go modules"
-	@echo "  run        - Run the application"
-	@echo "  help       - Show this help"
+	@echo "  build         - Build gotun binary for current platform"
+	@echo "  build-all     - Build for multiple platforms (amd64 only)"
+	@echo "  build-release - Build release versions for all platforms and architectures"
+	@echo "  package-release - Build and package release files"
+	@echo "  clean         - Remove build artifacts"
+	@echo "  test          - Run tests"
+	@echo "  lint          - Run linter"
+	@echo "  vet           - Run go vet"
+	@echo "  tidy          - Tidy go modules"
+	@echo "  run           - Run the application"
+	@echo "  version       - Show current version"
+	@echo "  help          - Show this help"
+	@echo ""
+	@echo "Release workflow:"
+	@echo "  1. Tag your commit: git tag v1.0.0"
+	@echo "  2. Build release:   make build-release"
+	@echo "  3. Package files:   make package-release"
