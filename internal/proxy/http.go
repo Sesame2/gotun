@@ -93,7 +93,7 @@ func (p *HTTPOverSSH) handleHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	p.logger.Debugf("通过SSH连接到目标地址: %s", targetAddr)
-	conn, err := p.ssh.Dial("tcp", targetAddr)
+	conn, err := p.ssh.client.Dial("tcp", targetAddr)
 	if err != nil {
 		p.logger.Errorf("无法通过SSH连接到目标 %s: %v", targetAddr, err)
 		http.Error(w, "无法通过SSH连接到目标", http.StatusBadGateway)
@@ -190,7 +190,7 @@ func (p *HTTPOverSSH) handleHTTPSConnect(w http.ResponseWriter, req *http.Reques
 
 	// 通过SSH隧道连接到目标HTTPS服务器
 	p.logger.Debugf("通过SSH连接到HTTPS目标地址: %s", targetAddr)
-	sshConn, err := p.ssh.Dial("tcp", targetAddr)
+	sshConn, err := p.ssh.client.Dial("tcp", targetAddr)
 	if err != nil {
 		p.logger.Errorf("无法通过SSH连接到HTTPS目标 %s: %v", targetAddr, err)
 		http.Error(w, "无法通过SSH连接到HTTPS目标", http.StatusBadGateway)

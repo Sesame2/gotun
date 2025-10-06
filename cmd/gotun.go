@@ -25,11 +25,13 @@ func printUsage() {
 	fmt.Println("\n选项:")
 	flag.PrintDefaults()
 	fmt.Println("\n示例:")
-	fmt.Println("  gotun user@example.com                 # 使用默认端口22")
-	fmt.Println("  gotun -p 2222 user@example.com         # 指定SSH端口")
-	fmt.Println("  gotun -i ~/.ssh/id_rsa user@example.com # 使用私钥认证")
-	fmt.Println("  gotun -listen :8888 user@example.com   # 自定义代理监听端口")
-	fmt.Println("  gotun -sys-proxy user@example.com      # 自动设置系统代理")
+	fmt.Println("  gotun user@example.com                           # 使用默认端口22")
+	fmt.Println("  gotun -p 2222 user@example.com                   # 指定SSH端口")
+	fmt.Println("  gotun -i ~/.ssh/id_rsa user@example.com          # 使用私钥认证")
+	fmt.Println("  gotun -listen :8888 user@example.com             # 自定义代理监听端口")
+	fmt.Println("  gotun -sys-proxy user@example.com                # 自动设置系统代理")
+	fmt.Println("  gotun -J jump@proxy.com user@target.com          # 使用单个跳板机")
+	fmt.Println("  gotun -J jump1@proxy1.com,jump2@proxy2.com user@target.com  # 多跳板机")
 }
 
 func main() {
@@ -101,7 +103,11 @@ func main() {
 
 	// 显示连接信息
 	fmt.Println("\n代理服务已启动:", "http://"+cfg.ListenAddr)
-	fmt.Println("使用", cfg.SSHServer, "作为SSH中继服务器")
+	if len(cfg.JumpHosts) > 0 {
+		fmt.Printf("跳板机链: %s -> %s\n", fmt.Sprintf("%v", cfg.JumpHosts), cfg.SSHServer)
+	} else {
+		fmt.Println("直连SSH服务器:", cfg.SSHServer)
+	}
 	if cfg.SystemProxy {
 		fmt.Println("系统代理已启用，所有流量将通过代理")
 	}
