@@ -79,6 +79,16 @@ make build
 
 编译后的可执行文件位于 `build/` 目录下。
 
+#### 使用 go install 一键安装 (推荐)
+
+Go 1.17 及以上版本可直接通过以下命令安装：
+
+```bash
+go install github.com/Sesame2/gotun/cmd/gotun@latest
+```
+
+安装后，`gotun` 命令即可在终端中直接使用（请确保你的 `$GOPATH/bin` 或 `$GOBIN` 目录已添加到系统 `PATH` 环境变量中）。
+
 ### 基本使用
 
 ```bash
