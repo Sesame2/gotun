@@ -2,6 +2,7 @@ BINARY_NAME=gotun
 VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 BUILD_DIR=./build
 LDFLAGS=-ldflags "-X main.Version=$(VERSION) -s -w"
+MAIN_PACKAGE=./cmd/gotun
 
 # Go命令
 GOCMD=go
@@ -27,7 +28,7 @@ all: lint test build
 build:
 	@echo "Building $(BINARY_NAME)..."
 	@mkdir -p $(BUILD_DIR)
-	@$(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/gotun.go
+	@$(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) $(MAIN_PACKAGE)
 	@echo "Build complete: $(BUILD_DIR)/$(BINARY_NAME)"
 
 # 交叉编译
@@ -36,17 +37,17 @@ build-all: build-linux build-windows build-darwin
 build-linux:
 	@echo "Building for Linux..."
 	@mkdir -p $(BUILD_DIR)
-	@GOOS=linux GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)_linux_amd64 ./cmd/gotun.go
+	@GOOS=linux GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)_linux_amd64 $(MAIN_PACKAGE)
 
 build-windows:
 	@echo "Building for Windows..."
 	@mkdir -p $(BUILD_DIR)
-	@GOOS=windows GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)_windows_amd64.exe ./cmd/gotun.go
+	@GOOS=windows GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)_windows_amd64.exe $(MAIN_PACKAGE)
 
 build-darwin:
 	@echo "Building for macOS..."
 	@mkdir -p $(BUILD_DIR)
-	@GOOS=darwin GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)_darwin_amd64 ./cmd/gotun.go
+	@GOOS=darwin GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)_darwin_amd64 $(MAIN_PACKAGE)
 
 # 发布构建 - 支持多架构
 build-release:
@@ -58,10 +59,10 @@ build-release:
 	    echo "Building $$os/$$arch..."; \
 	    if [ "$$os" = "windows" ]; then \
 	        GOOS=$$os GOARCH=$$arch $(GOBUILD) $(LDFLAGS) \
-	            -o $(BUILD_DIR)/$(BINARY_NAME)_$(VERSION)_$${os}_$${arch}.exe ./cmd/gotun.go; \
+	            -o $(BUILD_DIR)/$(BINARY_NAME)_$(VERSION)_$${os}_$${arch}.exe $(MAIN_PACKAGE); \
 	    else \
 	        GOOS=$$os GOARCH=$$arch $(GOBUILD) $(LDFLAGS) \
-	            -o $(BUILD_DIR)/$(BINARY_NAME)_$(VERSION)_$${os}_$${arch} ./cmd/gotun.go; \
+	            -o $(BUILD_DIR)/$(BINARY_NAME)_$(VERSION)_$${os}_$${arch} $(MAIN_PACKAGE); \
 	    fi; \
 	done
 	@echo "Release build complete for version: $(VERSION)"
@@ -118,7 +119,7 @@ tidy:
 
 # 运行程序
 run:
-	@$(GOCMD) run ./cmd/gotun.go
+	@$(GOCMD) run $(MAIN_PACKAGE)
 
 # 显示版本信息
 version:
