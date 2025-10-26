@@ -92,7 +92,7 @@ go install github.com/Sesame2/gotun/cmd/gotun@latest
 ### 基本使用
 
 ```bash
-# 基本用法：连接到SSH服务器并启动代理
+# 基本用法：连接到SSH服务器并启动系统代理
 ./gotun user@example.com
 
 # 指定SSH端口
@@ -104,8 +104,9 @@ go install github.com/Sesame2/gotun/cmd/gotun@latest
 # 自定义代理监听端口
 ./gotun -listen :8888 user@example.com
 
-# 自动设置系统代理
-./gotun -sys-proxy user@example.com
+# 自动设置系统代理（默认开启）
+# 若你希望启动时不修改系统代理，请显式关闭：
+./gotun -sys-proxy=false user@example.com
 ```
 
 ### 在浏览器中使用
@@ -146,7 +147,7 @@ go install github.com/Sesame2/gotun/cmd/gotun@latest
 ./gotun admin@jumpserver.company.com
 ```
 
-启动后，配置浏览器或应用使用 `http://127.0.0.1:8080` 代理，即可访问内网地址如 `http://192.168.1.100:8080`。
+启动后，浏览器和其他支持系统代理的应用将自动通过 `gotun` 访问网络。现在可以直接在浏览器中打开 `http://192.168.1.100:8080` 等内网地址。
 
 #### 2. 开发调试
 
@@ -157,13 +158,16 @@ go install github.com/Sesame2/gotun/cmd/gotun@latest
 ./gotun -listen :8888 -v developer@dev-server.com
 ```
 
+`gotun` 会自动设置系统代理（指向 `127.0.0.1:8888`）。开发工具如果支持系统代理，将能直接访问远程资源。如果不想影响系统其他应用的联网，可以禁用系统代理并手动配置开发工具：
+`./gotun -sys-proxy=false -listen :8888 -v developer@dev-server.com`
+
 #### 3. 作为网络出口
 
 将远程服务器作为你当前网络的出口，适合需要固定IP或访问特定网络资源的场景。
 
 ```bash
 # 启动并自动配置为系统代理
-./gotun -sys-proxy user@proxy-server.com
+./gotun user@proxy-server.com
 ```
 
 ### 跳板机 (Jump Host)
@@ -223,7 +227,9 @@ go install github.com/Sesame2/gotun/cmd/gotun@latest
 
 ### 系统代理设置
 
-当使用 `-sys-proxy` 参数时，程序会自动：
+默认情况下 (`-sys-proxy=true`)，`gotun` 会自动管理您操作系统的 HTTP 代理。如果您不希望 `gotun` 修改您的系统设置，可以在启动时使用 `-sys-proxy=false` 参数来禁用此功能。
+
+当系统代理功能开启时，程序会：
 
 1. **启动时**: 保存当前系统代理设置，然后设置为使用 gotun 代理
 2. **运行中**: 所有系统网络流量通过 gotun 代理
@@ -244,7 +250,7 @@ go install github.com/Sesame2/gotun/cmd/gotun@latest
 ./gotun -v user@example.com
 
 # 指定日志文件
-./gotun -v -log /tmp/gotun.log user@example.com
+./gotun -v -log ./gotun.log user@example.com
 ```
 
 #### 权限问题
