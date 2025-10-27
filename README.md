@@ -58,6 +58,7 @@
 - ✅ 支持多级跳板机 (Jump Host)，轻松穿透复杂网络
 - ✅ 支持跨平台运行（Windows / Linux / macOS）
 - ✅ 支持作为系统 HTTP 代理（可选扩展）
+- ✅ 自定义路由规则: 支持通过自定义的规则文件进行流量分流
 
 ---
 
@@ -134,7 +135,7 @@ go install github.com/Sesame2/gotun/cmd/gotun@latest
 | `-v` | | 启用详细日志 | `false` |
 | `-log` | | 日志文件路径 | 输出到标准输出 |
 | `-sys-proxy` | | 自动设置系统代理 | `true` |
-| `-proxy-pac` | | 代理自动配置(PAC)文件URL | |
+| `-rules` | | 代理规则配置文件路径 | |
 
 ### 使用场景
 
@@ -241,6 +242,47 @@ go install github.com/Sesame2/gotun/cmd/gotun@latest
 - ✅ **Windows**: 通过注册表配置
 - ✅ **Linux**: 通过 GNOME 设置和环境变量配置
 
+### 自定义路由规则 (高级)
+
+`gotun` 支持通过一个兼容 Clash 格式的 YAML 规则文件，来精细化地控制哪些网络请求通过 SSH 代理，哪些则直接连接。这对于希望同时访问内网资源（直连）和外部资源（代理）的场景非常有用。
+
+#### 1. 创建规则文件
+
+首先，创建一个规则文件，例如 `rules.yaml`：
+
+```yaml
+# rules.yaml
+# 模式: rule (规则模式), global (全局代理), direct (全局直连)
+mode: rule
+
+# 规则列表 (从上到下匹配，第一个匹配的规则生效)
+rules:
+  # 规则：让公司内网和常用国内网站直连
+  - DOMAIN-SUFFIX,internal.company.com,DIRECT
+  - IP-CIDR,10.0.0.0/8,DIRECT
+  - IP-CIDR,192.168.0.0/16,DIRECT
+  - DOMAIN-SUFFIX,cn,DIRECT
+  - DOMAIN-SUFFIX,qq.com,DIRECT
+
+  # 规则：让特定服务走代理
+  - DOMAIN-SUFFIX,google.com,PROXY
+  - DOMAIN-SUFFIX,github.com,PROXY
+
+  # 规则：所有其他未匹配的流量都走代理
+  - MATCH,PROXY
+```
+
+#### 2. 启动 gotun
+
+使用 `-rules` 参数指定规则文件的路径来启动 `gotun`。
+
+```bash
+./gotun -rules ./rules.yaml user@your_ssh_server.com
+```
+
+现在，当您访问 `internal.company.com` 时，流量会直接发送；而访问 `google.com` 时，流量则会通过 SSH 隧道代理。
+
+
 ### 故障排除
 
 #### 连接问题
@@ -279,8 +321,8 @@ sudo ./gotun user@example.com
 - [x] **跨平台支持**: Windows/Linux/macOS
 - [x] **命令行界面**: 完整的 CLI 参数支持
 - [x] **跳板机 (Jump Host)**: 支持单级和多级SSH跳板机
+- [x] **自定义路由规则**: 支持自定义的规则文件进行流量分流
 - [ ] **RDP网关**：支持RDP远程桌面网关
-- [ ] **PAC 文件支持**: 代理自动配置文件
 - [ ] **托盘 GUI 界面**: 图形化用户界面
 - [ ] **配置文件导出/导入**: 配置管理功能
 - [ ] **命令行自动补全**: 基于 Cobra 的智能提示
