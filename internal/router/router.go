@@ -2,6 +2,7 @@ package router
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strings"
 
@@ -34,6 +35,7 @@ const (
 	DomainKeyword RuleType = "DOMAIN-KEYWORD" // 域名关键字匹配
 	Domain        RuleType = "DOMAIN"         // 完整域名匹配
 	IPCIDR        RuleType = "IP-CIDR"        // IP段匹配
+	IPCIDR6       RuleType = "IP-CIDR6"       // IPv6
 	Match         RuleType = "MATCH"          // 所有规则都没命中时的匹配
 )
 
@@ -82,10 +84,19 @@ func NewRouter(path string) (*Router, error) {
 		rules: make([]Rule, 0, len(cfg.Rules)),
 	}
 
-	for _, line := range cfg.Rules {
+	for i, line := range cfg.Rules {
 		parts := strings.Split(line, ",")
 		if len(parts) < 2 {
 			continue
+		}
+
+		// 处理RuleType未匹配的情况
+		ruleType := RuleType(strings.ToUpper(parts[0]))
+		switch ruleType {
+		case DomainSuffix, DomainKeyword, Domain, IPCIDR, IPCIDR6, Match:
+			// 合法的 RuleType
+		default:
+			return nil, fmt.Errorf("规则文件第 %d 行存在未知的规则类型: %s", i+1, parts[0])
 		}
 
 		var target Action
@@ -104,12 +115,60 @@ func NewRouter(path string) (*Router, error) {
 			target = ActionProxy
 		}
 		rule := Rule{
-			// fixme：处理ruletype无法匹配的error
-			Type:    RuleType(strings.ToUpper(parts[0])),
+			Type:    ruleType,
 			Payload: parts[1],
 			Target:  target,
 		}
 		router.rules = append(router.rules, rule)
 	}
 	return router, nil
+}
+
+// 根据主机名决定流量的走向
+func (r *Router) Match(host string) Action {
+	// 1.处理全局模式
+	switch r.mode {
+	case ModeGlobal:
+		return ActionProxy
+	case ModeDirect:
+		return ActionDirect
+	}
+
+	// 2.处理规则模式
+	hostname := host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		// 如果有端口就去掉端口
+		hostname = h
+	}
+
+	// IP形式的规则
+	ip := net.ParseIP(hostname)
+	for _, rule := range r.rules {
+		match := false
+		switch rule.Type {
+		case DomainSuffix:
+			match = strings.HasSuffix(hostname, rule.Payload)
+		case DomainKeyword:
+			match = strings.Contains(hostname, rule.Payload)
+		case Domain:
+			match = hostname == rule.Payload
+		case IPCIDR, IPCIDR6:
+			if ip != nil {
+				_, cidr, err := net.ParseCIDR(rule.Payload)
+				if err == nil && cidr.Contains(ip) {
+					match = true
+				}
+			}
+		case Match:
+			// 最终匹配规则
+			match = true
+		}
+
+		if match {
+			return rule.Target
+		}
+	}
+
+	// 如果所有规则都未匹配，默认走代理
+	return ActionProxy
 }
