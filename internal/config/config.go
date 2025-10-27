@@ -22,8 +22,7 @@ type Config struct {
 	Verbose         bool
 	LogFile         string
 	InteractiveAuth bool
-	SystemProxy     bool   // 是否启用系统代理
-	SystemProxyPac  string // PAC文件URL，如果需要
+	SystemProxy     bool // 是否启用系统代理
 	RuleFile        string
 }
 
@@ -38,7 +37,6 @@ func NewConfig() *Config {
 		Verbose:         false,
 		InteractiveAuth: true,
 		SystemProxy:     true,
-		SystemProxyPac:  "",
 		RuleFile:        "",
 	}
 }
@@ -119,7 +117,6 @@ func (c *Config) ParseFlags() {
 	flag.BoolVar(&c.Verbose, "v", c.Verbose, "启用详细日志")
 	flag.StringVar(&c.LogFile, "log", c.LogFile, "日志文件路径 (默认输出到标准输出)")
 	flag.BoolVar(&c.SystemProxy, "sys-proxy", c.SystemProxy, "自动设置系统代理")
-	flag.StringVar(&c.SystemProxyPac, "proxy-pac", c.SystemProxyPac, "代理自动配置(PAC)文件URL")
 	flag.StringVar(&c.RuleFile, "rules", c.RuleFile, "代理规则配置文件路径")
 
 	// 解析标准参数
