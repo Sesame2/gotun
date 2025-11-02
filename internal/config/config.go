@@ -2,7 +2,6 @@ package config
 
 import (
 	"errors"
-	"flag"
 	"fmt"
 	"strings"
 	"time"
@@ -41,28 +40,6 @@ func NewConfig() *Config {
 	}
 }
 
-// 解析SSH目标格式(user@host)
-func parseSSHTarget(target string) (string, string, error) {
-	if target == "" {
-		return "", "", nil
-	}
-
-	parts := strings.Split(target, "@")
-	if len(parts) != 2 {
-		return "", "", fmt.Errorf("无效的SSH目标格式，需要 user@host 格式")
-	}
-
-	user := parts[0]
-	host := parts[1]
-
-	// 检查是否有效
-	if user == "" || host == "" {
-		return "", "", fmt.Errorf("用户名或主机名不能为空")
-	}
-
-	return user, host, nil
-}
-
 // parseJumpHost 解析跳板机格式
 func parseJumpHost(jumpHost string) (user, host, port string, err error) {
 	// 支持格式: user@host:port, user@host, host:port, host
@@ -96,56 +73,6 @@ func parseJumpHost(jumpHost string) (user, host, port string, err error) {
 	}
 
 	return user, host, port, nil
-}
-
-// ParseFlags 解析命令行参数
-func (c *Config) ParseFlags() {
-	var jumpHostsStr string
-
-	// 定义SSH端口参数
-	flag.StringVar(&c.SSHPort, "p", c.SSHPort, "SSH服务器端口")
-
-	// 定义跳板机参数
-	flag.StringVar(&jumpHostsStr, "J", "", "跳板机列表，用逗号分隔 (格式: user@host:port)")
-
-	// 定义其他标准参数
-	flag.StringVar(&c.ListenAddr, "listen", c.ListenAddr, "本地HTTP代理监听地址")
-	flag.StringVar(&c.SSHPassword, "pass", c.SSHPassword, "SSH密码")
-	flag.StringVar(&c.SSHKeyFile, "i", c.SSHKeyFile, "SSH私钥文件路径")
-	flag.StringVar(&c.SSHTargetDial, "target", c.SSHTargetDial, "可选的目标网络覆盖")
-	flag.DurationVar(&c.Timeout, "timeout", c.Timeout, "连接超时时间")
-	flag.BoolVar(&c.Verbose, "v", c.Verbose, "启用详细日志")
-	flag.StringVar(&c.LogFile, "log", c.LogFile, "日志文件路径 (默认输出到标准输出)")
-	flag.BoolVar(&c.SystemProxy, "sys-proxy", c.SystemProxy, "自动设置系统代理")
-	flag.StringVar(&c.RuleFile, "rules", c.RuleFile, "代理规则配置文件路径")
-
-	// 解析标准参数
-	flag.Parse()
-
-	// 解析跳板机列表
-	if jumpHostsStr != "" {
-		c.JumpHosts = strings.Split(jumpHostsStr, ",")
-		// 清理空白字符
-		for i, host := range c.JumpHosts {
-			c.JumpHosts[i] = strings.TrimSpace(host)
-		}
-	}
-
-	// 处理非标志参数(即 user@host 形式)
-	args := flag.Args()
-	if len(args) > 0 {
-		sshTarget := args[0]
-		user, host, err := parseSSHTarget(sshTarget)
-		if err == nil {
-			c.SSHUser = user
-			c.SSHServer = host
-		}
-	}
-
-	// 组合服务器地址和端口
-	if c.SSHServer != "" && !strings.Contains(c.SSHServer, ":") {
-		c.SSHServer = fmt.Sprintf("%s:%s", c.SSHServer, c.SSHPort)
-	}
 }
 
 // Validate 验证配置
