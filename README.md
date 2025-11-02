@@ -104,11 +104,11 @@ go install github.com/Sesame2/gotun/cmd/gotun@latest
 ./gotun -i ~/.ssh/id_rsa user@example.com
 
 # 自定义代理监听端口
-./gotun -listen :8888 user@example.com
+./gotun --listen :8888 user@example.com
 
 # 自动设置系统代理（默认开启）
 # 若你希望启动时不修改系统代理，请显式关闭：
-./gotun -sys-proxy=false user@example.com
+./gotun --sys-proxy=false user@example.com
 ```
 
 ### 在浏览器中使用
@@ -126,17 +126,17 @@ go install github.com/Sesame2/gotun/cmd/gotun@latest
 
 | 参数 | 简写 | 说明 | 默认值 |
 |------|------|------|--------|
-| `-listen` | | 本地HTTP代理监听地址 | `:8080` |
-| `-p` | | SSH服务器端口 | `22` |
-| `-pass` | | SSH密码（不推荐，建议使用私钥） | |
-| `-i` | | SSH私钥文件路径 | |
-| `-J` | | SSH跳板机，支持多级，用逗号分隔 (格式: `user@host:port`) | |
-| `-target` | | 可选的目标网络覆盖 | |
-| `-timeout` | | 连接超时时间 | `10s` |
-| `-v` | | 启用详细日志 | `false` |
-| `-log` | | 日志文件路径 | 输出到标准输出 |
-| `-sys-proxy` | | 自动设置系统代理 | `true` |
-| `-rules` | | 代理规则配置文件路径 | |
+| `--listen` | `-l` | 本地HTTP代理监听地址 | `:8080` |
+| `--port` | `-p` | SSH服务器端口 | `22` |
+| `--pass` | | SSH密码 (不安全, 建议使用交互式认证) | |
+| `--identity_file` | `-i` | 用于认证的私钥文件路径 | |
+| `--jump` | `-J` | 跳板机列表,用逗号分隔 (格式: user@host:port) | |
+| `--target` | | 可选的目标网络覆盖 | |
+| `--timeout` | | 连接超时时间 | `10s` |
+| `--verbose` | `-v` | 启用详细日志 | `false` |
+| `--log` | | 日志文件路径 | 输出到标准输出 |
+| `--sys-proxy` | | 自动设置/恢复系统代理 | `true` |
+| `--rules` | | 代理规则配置文件路径 | |
 
 ### 使用场景
 
@@ -157,11 +157,11 @@ go install github.com/Sesame2/gotun/cmd/gotun@latest
 
 ```bash
 # 启用详细日志进行调试，并指定监听端口
-./gotun -listen :8888 -v developer@dev-server.com
+./gotun --listen :8888 -v developer@dev-server.com
 ```
 
 `gotun` 会自动设置系统代理（指向 `127.0.0.1:8888`）。开发工具如果支持系统代理，将能直接访问远程资源。如果不想影响系统其他应用的联网，可以禁用系统代理并手动配置开发工具：
-`./gotun -sys-proxy=false -listen :8888 -v developer@dev-server.com`
+`./gotun --sys-proxy=false --listen :8888 -v developer@dev-server.com`
 
 #### 3. 作为网络出口
 
@@ -224,12 +224,12 @@ go install github.com/Sesame2/gotun/cmd/gotun@latest
 # 程序会提示输入密码
 
 # 命令行指定密码（不安全，不推荐）
-./gotun -pass yourpassword user@example.com
+./gotun --pass yourpassword user@example.com
 ```
 
 ### 系统代理设置
 
-默认情况下 (`-sys-proxy=true`)，`gotun` 会自动管理您操作系统的 HTTP 代理。如果您不希望 `gotun` 修改您的系统设置，可以在启动时使用 `-sys-proxy=false` 参数来禁用此功能。
+默认情况下 (`--sys-proxy=true`)，`gotun` 会自动管理您操作系统的 HTTP 代理。如果您不希望 `gotun` 修改您的系统设置，可以在启动时使用 `--sys-proxy=false` 参数来禁用此功能。
 
 当系统代理功能开启时，程序会：
 
@@ -275,10 +275,10 @@ rules:
 
 #### 2. 启动 gotun
 
-使用 `-rules` 参数指定规则文件的路径来启动 `gotun`。
+使用 `--rules` 参数指定规则文件的路径来启动 `gotun`。
 
 ```bash
-./gotun -rules ./rules.yaml user@your_ssh_server.com
+./gotun --rules ./rules.yaml user@your_ssh_server.com
 ```
 
 现在，当您访问 `internal.company.com` 时，流量会直接发送；而访问 `google.com` 时，流量则会通过 SSH 隧道代理。
@@ -293,7 +293,7 @@ rules:
 ./gotun -v user@example.com
 
 # 指定日志文件
-./gotun -v -log ./gotun.log user@example.com
+./gotun -v --log ./gotun.log user@example.com
 ```
 
 #### 权限问题
