@@ -67,6 +67,14 @@
 
 ### 安装
 
+#### 使用安装脚本 (推荐)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Sesame2/gotun/main/scripts/install.sh | sh
+```
+
+脚本会将 `gotun` 安装到 `~/.local/bin` 或 `/usr/local/bin`。安装完成后，请确保安装目录已添加到您的 `PATH` 环境变量中。
+
 #### 下载预编译二进制文件
 
 前往 [Releases](https://github.com/Sesame2/gotun/releases) 页面下载适合你系统的预编译版本。
@@ -81,7 +89,7 @@ make build
 
 编译后的可执行文件位于 `build/` 目录下。
 
-#### 使用 go install 一键安装 (推荐)
+#### 使用 go install 安装
 
 Go 1.17 及以上版本可直接通过以下命令安装：
 
@@ -89,26 +97,28 @@ Go 1.17 及以上版本可直接通过以下命令安装：
 go install github.com/Sesame2/gotun/cmd/gotun@latest
 ```
 
-安装后，`gotun` 命令即可在终端中直接使用（请确保你的 `$GOPATH/bin` 或 `$GOBIN` 目录已添加到系统 `PATH` 环境变量中）。
+> **⚠️ 注意**: 使用 `go install` 安装的版本可能无法通过 `--version` 参数正确显示版本号，因为它直接从源码编译，缺少版本信息的注入。为了显示正确的版本信息，推荐使用安装脚本。
+
+安装后，请确保你的 `$GOPATH/bin` 或 `$GOBIN` 目录已添加到系统 `PATH` 环境变量中。
 
 ### 基本使用
 
 ```bash
 # 基本用法：连接到SSH服务器并启动系统代理
-./gotun user@example.com
+gotun user@example.com
 
 # 指定SSH端口
-./gotun -p 2222 user@example.com
+gotun -p 2222 user@example.com
 
 # 使用私钥认证
-./gotun -i ~/.ssh/id_rsa user@example.com
+gotun -i ~/.ssh/id_rsa user@example.com
 
 # 自定义代理监听端口
-./gotun --listen :8888 user@example.com
+gotun --listen :8888 user@example.com
 
 # 自动设置系统代理（默认开启）
 # 若你希望启动时不修改系统代理，请显式关闭：
-./gotun --sys-proxy=false user@example.com
+gotun --sys-proxy=false user@example.com
 ```
 
 ### 在浏览器中使用
@@ -146,7 +156,7 @@ go install github.com/Sesame2/gotun/cmd/gotun@latest
 
 ```bash
 # 连接到跳板机，启动代理服务
-./gotun admin@jumpserver.company.com
+gotun admin@jumpserver.company.com
 ```
 
 启动后，浏览器和其他支持系统代理的应用将自动通过 `gotun` 访问网络。现在可以直接在浏览器中打开 `http://192.168.1.100:8080` 等内网地址。
@@ -157,11 +167,11 @@ go install github.com/Sesame2/gotun/cmd/gotun@latest
 
 ```bash
 # 启用详细日志进行调试，并指定监听端口
-./gotun --listen :8888 -v developer@dev-server.com
+gotun --listen :8888 -v developer@dev-server.com
 ```
 
 `gotun` 会自动设置系统代理（指向 `127.0.0.1:8888`）。开发工具如果支持系统代理，将能直接访问远程资源。如果不想影响系统其他应用的联网，可以禁用系统代理并手动配置开发工具：
-`./gotun --sys-proxy=false --listen :8888 -v developer@dev-server.com`
+`gotun --sys-proxy=false --listen :8888 -v developer@dev-server.com`
 
 #### 3. 作为网络出口
 
@@ -169,7 +179,7 @@ go install github.com/Sesame2/gotun/cmd/gotun@latest
 
 ```bash
 # 启动并自动配置为系统代理
-./gotun user@proxy-server.com
+gotun user@proxy-server.com
 ```
 
 ### 跳板机 (Jump Host)
@@ -191,7 +201,7 @@ go install github.com/Sesame2/gotun/cmd/gotun@latest
 通过 `jump.host.com` 连接到 `target.server.com`。
 
 ```bash
-./gotun -J user1@jump.host.com user2@target.server.com
+gotun -J user1@jump.host.com user2@target.server.com
 ```
 
 #### 多级跳板机
@@ -199,7 +209,7 @@ go install github.com/Sesame2/gotun/cmd/gotun@latest
 通过 `jump1` -> `jump2` -> `target` 的顺序连接。
 
 ```bash
-./gotun -J user1@jump1.com,user2@jump2.com user3@target.com
+gotun -J user1@jump1.com,user2@jump2.com user3@target.com
 ```
 
 `gotun` 会依次建立SSH隧道，最终连接到目标服务器。
@@ -210,21 +220,21 @@ go install github.com/Sesame2/gotun/cmd/gotun@latest
 
 ```bash
 # 使用指定私钥文件
-./gotun -i ~/.ssh/id_rsa user@example.com
+gotun -i ~/.ssh/id_rsa user@example.com
 
 # 使用默认私钥（自动检测 ~/.ssh/ 目录下的密钥）
-./gotun user@example.com
+gotun user@example.com
 ```
 
 #### 密码认证
 
 ```bash
 # 交互式输入密码（推荐）
-./gotun user@example.com
+gotun user@example.com
 # 程序会提示输入密码
 
 # 命令行指定密码（不安全，不推荐）
-./gotun --pass yourpassword user@example.com
+gotun --pass yourpassword user@example.com
 ```
 
 ### 系统代理设置
@@ -278,7 +288,7 @@ rules:
 使用 `--rules` 参数指定规则文件的路径来启动 `gotun`。
 
 ```bash
-./gotun --rules ./rules.yaml user@your_ssh_server.com
+gotun --rules ./rules.yaml user@your_ssh_server.com
 ```
 
 现在，当您访问 `internal.company.com` 时，流量会直接发送；而访问 `google.com` 时，流量则会通过 SSH 隧道代理。
@@ -290,10 +300,10 @@ rules:
 
 ```bash
 # 启用详细日志进行调试
-./gotun -v user@example.com
+gotun -v user@example.com
 
 # 指定日志文件
-./gotun -v --log ./gotun.log user@example.com
+gotun -v --log ./gotun.log user@example.com
 ```
 
 #### 权限问题
@@ -302,7 +312,7 @@ rules:
 
 ```bash
 # macOS/Linux
-sudo ./gotun user@example.com
+sudo gotun user@example.com
 
 # Windows (以管理员身份运行 PowerShell/CMD)
 .\gotun.exe user@example.com
