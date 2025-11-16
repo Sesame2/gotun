@@ -75,6 +75,12 @@ curl -fsSL https://raw.githubusercontent.com/Sesame2/gotun/main/scripts/install.
 
 脚本会将 `gotun` 安装到 `~/.local/bin` 或 `/usr/local/bin`。安装完成后，请确保安装目录已添加到您的 `PATH` 环境变量中。
 
+#### 使用Homebrew安装 ( macOS / Linux )
+
+```bash
+brew install gotun
+```
+
 #### 下载预编译二进制文件
 
 前往 [Releases](https://github.com/Sesame2/gotun/releases) 页面下载适合你系统的预编译版本。
