@@ -1,0 +1,78 @@
+name: Go CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-test-lint:
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+
+      - name: Install dependencies
+        run: go mod download
+
+      #####################################################
+      #                 FORMAT CHECK (GOFMT)
+      #####################################################
+      - name: Check code format (gofmt)
+        if: runner.os == 'Linux'
+        run: |
+          echo "Running gofmt..."
+          fmt_output=$(gofmt -l .)
+          if [ -n "$fmt_output" ]; then
+            echo "❌ Some files need formatting:"
+            echo "$fmt_output"
+            exit 1
+          fi
+          echo "✓ gofmt passed"
+
+      #####################################################
+      #                 STATICCHECK
+      #####################################################
+      - name: Install staticcheck
+        if: runner.os == 'Linux'
+        run: go install honnef.co/go/tools/cmd/staticcheck@latest
+
+      - name: Run staticcheck
+        if: runner.os == 'Linux'
+        run: staticcheck ./...
+
+      #####################################################
+      #                 GOLANGCI-LINT
+      #####################################################
+      - name: Install golangci-lint
+        if: runner.os == 'Linux'
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
+            | sh -s -- -b $(go env GOPATH)/bin v1.57.2
+
+      - name: Lint
+        if: runner.os == 'Linux'
+        run: make lint
+
+      #####################################################
+      #                    VET + TEST + BUILD
+      #####################################################
+      - name: Vet
+        run: make vet
+
+      # - name: Test
+      #   run: make test
+
+      - name: Build
+        run: make build
