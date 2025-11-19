@@ -1,5 +1,13 @@
 # gotun
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/Sesame2/gotun.svg)](https://pkg.go.dev/github.com/Sesame2/gotun)
+[![Go Report Card](https://goreportcard.com/badge/github.com/Sesame2/gotun)](https://goreportcard.com/report/github.com/Sesame2/gotun)
+[![Release](https://img.shields.io/github/v/release/Sesame2/gotun)](https://github.com/Sesame2/gotun/releases)
+[![Downloads](https://img.shields.io/github/downloads/Sesame2/gotun/total.svg)](https://github.com/Sesame2/gotun/releases)
+[![Homebrew](https://img.shields.io/homebrew/v/gotun)](https://formulae.brew.sh/formula/gotun)
+![Go Version](https://img.shields.io/github/go-mod/go-version/Sesame2/gotun)
+[![License](https://img.shields.io/github/license/Sesame2/gotun.svg)](LICENSE)
+
 > 🚀 基于 SSH 的轻量级 HTTP 代理工具，使用 Go 编写，跨平台开箱即用。
 
 ---
