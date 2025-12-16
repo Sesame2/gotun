@@ -25,23 +25,8 @@ type HTTPOverSSH struct {
 }
 
 // NewHTTPOverSSH 创建HTTP代理
-func NewHTTPOverSSH(cfg *config.Config, log *logger.Logger) (*HTTPOverSSH, error) {
+func NewHTTPOverSSH(cfg *config.Config, log *logger.Logger, sshClient *SSHClient, r *router.Router) (*HTTPOverSSH, error) {
 	log.Info("初始化HTTP-over-SSH代理")
-
-	sshClient, err := NewSSHClient(cfg, log)
-	if err != nil {
-		return nil, err
-	}
-
-	var r *router.Router
-	if cfg.RuleFile != "" {
-		r, err = router.NewRouter(cfg.RuleFile)
-		if err != nil {
-			log.Warnf("加载规则文件失败: %v。将以全局代理模式运行。", err)
-		} else {
-			log.Infof("已加载规则文件: %s", cfg.RuleFile)
-		}
-	}
 
 	proxy := &HTTPOverSSH{
 		cfg:    cfg,
@@ -219,12 +204,6 @@ func (p *HTTPOverSSH) Close() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		err = p.server.Shutdown(ctx)
-	}
-	if p.ssh != nil {
-		sshErr := p.ssh.Close()
-		if sshErr != nil && err == nil {
-			err = sshErr
-		}
 	}
 	return err
 }

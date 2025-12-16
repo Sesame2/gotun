@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	"github.com/Sesame2/gotun/internal/config"
 	"github.com/Sesame2/gotun/internal/logger"
 	"github.com/Sesame2/gotun/internal/proxy"
+	"github.com/Sesame2/gotun/internal/router"
 	"github.com/Sesame2/gotun/internal/sysproxy"
 	"github.com/spf13/cobra"
 )
@@ -57,9 +60,38 @@ var rootCmd = &cobra.Command{
 		}
 		log.Infof("GoTun %s 启动中...", Version)
 
-		httpProxy, err := proxy.NewHTTPOverSSH(cfg, log)
+		// 1. 初始化 Router
+		var r *router.Router
+		if cfg.RuleFile != "" {
+			var err error
+			r, err = router.NewRouter(cfg.RuleFile)
+			if err != nil {
+				log.Warnf("加载规则文件失败: %v。将以全局代理模式运行。", err)
+			} else {
+				log.Infof("已加载规则文件: %s", cfg.RuleFile)
+			}
+		}
+
+		// 2. 初始化 SSHClient
+		sshClient, err := proxy.NewSSHClient(cfg, log)
 		if err != nil {
-			return fmt.Errorf("代理初始化失败: %w", err)
+			return fmt.Errorf("SSH连接失败: %w", err)
+		}
+		defer sshClient.Close()
+
+		// 3. 初始化 HTTP 代理
+		httpProxy, err := proxy.NewHTTPOverSSH(cfg, log, sshClient, r)
+		if err != nil {
+			return fmt.Errorf("HTTP代理初始化失败: %w", err)
+		}
+
+		// 4. 初始化 SOCKS5 代理
+		var socksProxy *proxy.SOCKS5OverSSH
+		if cfg.SocksAddr != "" {
+			socksProxy, err = proxy.NewSOCKS5OverSSH(cfg, log, sshClient, r)
+			if err != nil {
+				return fmt.Errorf("SOCKS5代理初始化失败: %w", err)
+			}
 		}
 
 		var proxyMgr *sysproxy.Manager
@@ -77,12 +109,33 @@ var rootCmd = &cobra.Command{
 				}
 			}
 			if err := httpProxy.Start(); err != nil {
-				log.Errorf("代理服务启动失败: %v", err)
+				log.Errorf("HTTP代理服务启动失败: %v", err)
 				sigChan <- syscall.SIGTERM
 			}
 		}()
 
-		fmt.Println("\n代理服务已启动:", "http://"+cfg.ListenAddr)
+		if socksProxy != nil {
+			go func() {
+				if err := socksProxy.Start(); err != nil {
+					// 判断是否是正常关闭导致的错误
+					// FIXME: 这么处理还是不够优雅，后续可以考虑换一个socks的实现来避免这个问题
+					if errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "use of closed network connection") {
+						// 这是正常的关闭流程，不需要报错
+						return
+					}
+
+					log.Errorf("SOCKS5代理服务启动失败: %v", err)
+					sigChan <- syscall.SIGTERM
+				}
+			}()
+		}
+
+		fmt.Println("\n代理服务已启动:")
+		fmt.Println("HTTP Proxy:", "http://"+cfg.ListenAddr)
+		if cfg.SocksAddr != "" {
+			fmt.Println("SOCKS5 Proxy:", "socks5://"+cfg.SocksAddr)
+		}
+
 		if len(cfg.JumpHosts) > 0 {
 			fmt.Printf("跳板机链: %s -> %s\n", fmt.Sprintf("%v", cfg.JumpHosts), cfg.SSHServer)
 		} else {
@@ -106,7 +159,14 @@ var rootCmd = &cobra.Command{
 		}
 
 		if err := httpProxy.Close(); err != nil {
-			log.Errorf("关闭代理服务失败: %v", err)
+			log.Errorf("关闭HTTP代理服务失败: %v", err)
+		}
+
+		// 新增关闭逻辑
+		if socksProxy != nil {
+			if err := socksProxy.Close(); err != nil {
+				log.Errorf("关闭SOCKS5代理服务失败: %v", err)
+			}
 		}
 
 		return nil
@@ -127,6 +187,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfg.LogFile, "log", "", "日志文件路径")
 	rootCmd.PersistentFlags().BoolVar(&cfg.SystemProxy, "sys-proxy", true, "自动设置/恢复系统代理")
 	rootCmd.PersistentFlags().StringVar(&cfg.RuleFile, "rules", "", "代理规则配置文件路径")
+	rootCmd.PersistentFlags().StringVar(&cfg.SocksAddr, "socks5", ":1080", "SOCKS5 代理监听地址")
 }
 
 func Execute(version string) {
