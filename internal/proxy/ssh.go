@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -241,4 +242,12 @@ func loadPrivateKey(path string) (ssh.Signer, error) {
 	}
 
 	return signer, nil
+}
+
+// 增加Dial方法的实现，使其满足常见的 Dialer 接口
+func (s *SSHClient) Dial(network, addr string) (net.Conn, error) {
+	if s.client == nil {
+		return nil, fmt.Errorf("ssh client not ready")
+	}
+	return s.client.Dial(network, addr)
 }

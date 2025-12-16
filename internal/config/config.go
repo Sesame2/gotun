@@ -16,6 +16,7 @@ type Config struct {
 	SSHKeyFile      string
 	SSHTargetDial   string
 	SSHPort         string   // 添加SSH端口配置
+	SocksAddr       string   // SOCKS5 监听地址
 	JumpHosts       []string // 跳板机列表
 	Timeout         time.Duration
 	Verbose         bool
@@ -37,6 +38,7 @@ func NewConfig() *Config {
 		InteractiveAuth: true,
 		SystemProxy:     true,
 		RuleFile:        "",
+		SocksAddr:       "",
 	}
 }
 
