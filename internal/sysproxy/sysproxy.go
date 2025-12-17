@@ -15,32 +15,44 @@ import (
 // Manager 管理系统代理设置
 type Manager struct {
 	logger       *logger.Logger
-	proxyAddress string
+	httpAddr     string
+	socksAddr    string
 	enabled      bool
 	origSettings map[string]string // 保存原始设置
 }
 
 // NewManager 创建新的系统代理管理器
-func NewManager(log *logger.Logger, listenAddr string) *Manager {
+func NewManager(log *logger.Logger, httpListenAddr, socksListenAddr string) *Manager {
 	// 解析地址，确保格式正确
-	host, portStr, err := net.SplitHostPort(listenAddr)
+	host, portStr, err := net.SplitHostPort(httpListenAddr)
 	if err != nil {
-		log.Warnf("无法解析监听地址 %s: %v, 使用原始地址", listenAddr, err)
-		return &Manager{
-			logger:       log,
-			proxyAddress: listenAddr,
-			origSettings: make(map[string]string),
-		}
+		log.Warnf("无法解析监听地址 %s: %v, 使用原始地址", httpListenAddr, err)
+		host = "127.0.0.1"
+		portStr = "8080"
 	}
 
 	// 如果主机为空，使用localhost
 	if host == "" || host == "0.0.0.0" {
 		host = "127.0.0.1"
 	}
+	httpAddr := fmt.Sprintf("%s:%s", host, portStr)
+
+	// 解析 socksAddr
+	var finalSocksAddr string
+	if socksListenAddr != "" {
+		shost, sportStr, serr := net.SplitHostPort(socksListenAddr)
+		if serr == nil {
+			if shost == "" || shost == "0.0.0.0" {
+				shost = "127.0.0.1"
+			}
+			finalSocksAddr = fmt.Sprintf("%s:%s", shost, sportStr)
+		}
+	}
 
 	return &Manager{
 		logger:       log,
-		proxyAddress: fmt.Sprintf("%s:%s", host, portStr),
+		httpAddr:     httpAddr,
+		socksAddr:    finalSocksAddr,
 		origSettings: make(map[string]string),
 	}
 }
@@ -74,7 +86,10 @@ func (m *Manager) Enable() error {
 	}
 
 	m.enabled = true
-	m.logger.Infof("系统代理已设置为 %s", m.proxyAddress)
+	m.logger.Infof("系统代理已设置为 HTTP:%s", m.httpAddr)
+	if m.socksAddr != "" {
+		m.logger.Infof("系统代理已设置为 SOCKS5:%s", m.socksAddr)
+	}
 	return nil
 }
 
@@ -165,7 +180,7 @@ func (m *Manager) saveSettingsMacOS() error {
 func (m *Manager) enableMacOS() error {
 	m.logger.Debug("设置MacOS系统代理...")
 
-	host, portStr, _ := net.SplitHostPort(m.proxyAddress)
+	host, portStr, _ := net.SplitHostPort(m.httpAddr)
 	port, _ := strconv.Atoi(portStr)
 
 	// 获取网络服务列表
@@ -197,6 +212,18 @@ func (m *Manager) enableMacOS() error {
 			continue
 		}
 
+		// 设置SOCKS代理
+		if m.socksAddr != "" {
+			shost, sportStr, _ := net.SplitHostPort(m.socksAddr)
+			cmd = exec.Command("networksetup", "-setsocksfirewallproxy", service, shost, sportStr)
+			if err := cmd.Run(); err != nil {
+				m.logger.Warnf("为服务 %s 设置SOCKS代理失败: %v", service, err)
+			} else {
+				cmd = exec.Command("networksetup", "-setsocksfirewallproxystate", service, "on")
+				cmd.Run()
+			}
+		}
+
 		// 启用代理
 		cmd = exec.Command("networksetup", "-setwebproxystate", service, "on")
 		cmd.Run()
@@ -224,6 +251,10 @@ func (m *Manager) disableMacOS() error {
 
 		// 禁用HTTPS代理
 		cmd = exec.Command("networksetup", "-setsecurewebproxystate", service, "off")
+		cmd.Run()
+
+		// 禁用SOCKS代理
+		cmd = exec.Command("networksetup", "-setsocksfirewallproxystate", service, "off")
 		cmd.Run()
 	}
 
@@ -284,7 +315,13 @@ func (m *Manager) enableWindows() error {
 	m.logger.Debug("设置Windows系统代理...")
 
 	// 设置代理服务器
-	cmd := exec.Command("reg", "add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyServer", "/t", "REG_SZ", "/d", m.proxyAddress, "/f")
+	// 格式: http=127.0.0.1:8080;https=127.0.0.1:8080;socks=127.0.0.1:1080
+	proxyStr := fmt.Sprintf("http=%s;https=%s", m.httpAddr, m.httpAddr)
+	if m.socksAddr != "" {
+		proxyStr += fmt.Sprintf(";socks=%s", m.socksAddr)
+	}
+
+	cmd := exec.Command("reg", "add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyServer", "/t", "REG_SZ", "/d", proxyStr, "/f")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("设置代理服务器失败: %v", err)
 	}
@@ -389,7 +426,7 @@ func (m *Manager) enableLinux() error {
 	m.logger.Debug("设置Linux系统代理...")
 
 	// 尝试GNOME设置
-	host, portStr, _ := net.SplitHostPort(m.proxyAddress)
+	host, portStr, _ := net.SplitHostPort(m.httpAddr)
 
 	// 设置HTTP代理
 	cmd := exec.Command("gsettings", "set", "org.gnome.system.proxy.http", "host", host)
@@ -405,6 +442,16 @@ func (m *Manager) enableLinux() error {
 	cmd = exec.Command("gsettings", "set", "org.gnome.system.proxy.https", "port", portStr)
 	cmd.Run()
 
+	// 设置SOCKS代理
+	if m.socksAddr != "" {
+		shost, sportStr, _ := net.SplitHostPort(m.socksAddr)
+		cmd = exec.Command("gsettings", "set", "org.gnome.system.proxy.socks", "host", shost)
+		cmd.Run()
+
+		cmd = exec.Command("gsettings", "set", "org.gnome.system.proxy.socks", "port", sportStr)
+		cmd.Run()
+	}
+
 	// 清空忽略主机列表
 	cmd = exec.Command("gsettings", "set", "org.gnome.system.proxy", "ignore-hosts", "[]")
 	cmd.Run()
@@ -414,8 +461,8 @@ func (m *Manager) enableLinux() error {
 	cmd.Run()
 
 	// 设置环境变量
-	os.Setenv("http_proxy", "http://"+m.proxyAddress)
-	os.Setenv("https_proxy", "http://"+m.proxyAddress)
+	os.Setenv("http_proxy", "http://"+m.httpAddr)
+	os.Setenv("https_proxy", "http://"+m.httpAddr)
 	os.Setenv("no_proxy", "")
 
 	return nil

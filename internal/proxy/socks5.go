@@ -50,7 +50,7 @@ func (s *SOCKS5OverSSH) Start() error {
 	s.listener = l
 	s.mu.Unlock()
 
-	s.logger.Infof("SOCKS5 代理已启动，监听地址: %s (支持远程 DNS 解析)", addr)
+	s.logger.Infof("SOCKS5 代理已启动，监听地址: %s", addr)
 
 	for {
 		conn, err := l.Accept()
