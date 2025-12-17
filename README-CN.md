@@ -163,7 +163,7 @@ gotun --socks5 :1080 user@example.com
 | `--identity_file` | `-i` | 用于认证的私钥文件路径 | |
 | `--jump` | `-J` | 跳板机列表,用逗号分隔 (格式: user@host:port) | |
 | `--target` | | 可选的目标网络覆盖 | |
-| `--socks5` | | SOCKS5 代理监听端口 | `:1080` |
+| `--socks5` | | SOCKS5 代理监听地址 | `:1080` |
 | `--timeout` | | 连接超时时间 | `10s` |
 | `--verbose` | `-v` | 启用详细日志 | `false` |
 | `--log` | | 日志文件路径 | 输出到标准输出 |

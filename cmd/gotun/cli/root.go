@@ -1,9 +1,7 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
-	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -117,13 +115,6 @@ var rootCmd = &cobra.Command{
 		if socksProxy != nil {
 			go func() {
 				if err := socksProxy.Start(); err != nil {
-					// 判断是否是正常关闭导致的错误
-					// FIXME: 这么处理还是不够优雅，后续可以考虑换一个socks的实现来避免这个问题
-					if errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "use of closed network connection") {
-						// 这是正常的关闭流程，不需要报错
-						return
-					}
-
 					log.Errorf("SOCKS5代理服务启动失败: %v", err)
 					sigChan <- syscall.SIGTERM
 				}
