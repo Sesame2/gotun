@@ -73,6 +73,7 @@ Your machine            SSH (tcp/22)                   Bastion                 I
 - Rule-based traffic splitting via configuration file
 - Shell completion support for Bash, Zsh, Fish, PowerShell
 - Structured logging and verbose mode for debugging
+- SOCKS5 proxy support
 
 ---
 
@@ -141,7 +142,12 @@ gotun --listen :8888 user@example.com
 
 # Disable automatic system proxy configuration
 gotun --sys-proxy=false user@example.com
+
+# Enable SOCKS5 proxy (default listen on :1080)
+gotun --socks5 :1080 user@example.com
 ```
+
+> **Note**: When using SOCKS5 with custom routing rules, it is recommended to enable "Proxy DNS when using SOCKS5" (Remote DNS) in your client. Otherwise, the client might resolve domains to IPs locally, causing domain-based routing rules to fail.
 
 ### Browser configuration
 
@@ -166,6 +172,7 @@ If system proxy support is enabled, some platforms can be configured automatical
 | `--identity_file` | `-i`  | Private key file path                             |              |
 | `--jump`          | `-J`  | Comma-separated jump hosts (`user@host:port`)     |              |
 | `--target`        |       | Optional target network scope/coverage            |              |
+| `--socks5`        |       | SOCKS5 proxy bind address                         | `:1080`      |
 | `--timeout`       |       | SSH connection timeout                            | `10s`        |
 | `--verbose`       | `-v`  | Enable verbose logging                            | `false`      |
 | `--log`           |       | Log file path                                     | stdout       |
@@ -400,13 +407,13 @@ Implemented:
 - [x] Single and multi-hop jump host support
 - [x] Rule-based routing
 - [x] Shell completion for common shells
+- [x] SOCKS5 proxy support
 
 Planned:
 
 - [ ] RDP gateway support
 - [ ] Tray/GUI frontend
 - [ ] Export/import of configuration profiles
-- [ ] SOCKS5 proxy support
 - [ ] Connection pooling and performance tuning
 - [ ] Traffic statistics and basic monitoring
 
