@@ -1,104 +1,254 @@
 package proxy
 
 import (
-	"context"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/Sesame2/gotun/internal/config"
 	"github.com/Sesame2/gotun/internal/logger"
 	"github.com/Sesame2/gotun/internal/router"
-	"github.com/armon/go-socks5"
 )
 
 type SOCKS5OverSSH struct {
-	server   *socks5.Server
 	cfg      *config.Config
 	logger   *logger.Logger
+	ssh      *SSHClient
+	router   *router.Router
 	listener net.Listener
+	mu       sync.Mutex // 互斥锁，保证 Close 的线程安全
 }
 
-// SSHDialer 这是一个实现了 proxy.Dialer 接口的结构体
-// 它负责把 SOCKS5 库的拨号请求“劫持”到我们的逻辑里
-type SSHDialer struct {
-	ssh    *SSHClient
-	router *router.Router
-	logger *logger.Logger
-}
-
-// Dial 实现 DialContext 接口
-func (d *SSHDialer) Dial(ctx context.Context, network, addr string) (net.Conn, error) {
-	// 1. 路由判断
-	// FIXME: 使用 SOCKS5 时，建议客户端开启 "Proxy DNS when using SOCKS5" 或类似选项，以确保域名规则生效。
-	if d.router != nil {
-		host, _, _ := net.SplitHostPort(addr)
-		action := d.router.Match(host)
-
-		// 如果规则是直连
-		if action == router.ActionDirect {
-			d.logger.Infof("[SOCKS5] 规则匹配: %s -> DIRECT", host)
-			// 使用本地网络直连
-			dialer := net.Dialer{Timeout: 10 * time.Second}
-			return dialer.DialContext(ctx, network, addr)
-		}
-		d.logger.Infof("[SOCKS5] 规则匹配: %s -> PROXY", host)
-	}
-	// 2. 默认走 SSH 代理
-	d.logger.Debugf("[SOCKS5] SSH Tunneling to %s", addr)
-
-	// ssh.Client.Dial 没有 Context 参数，这里忽略 ctx
-	return d.ssh.Dial(network, addr)
-}
-
-// NewSOCKS5OverSSH 创建 SOCKS5 代理
-// 注意：这里传入已经建立好的 sshClient
+// NewSOCKS5OverSSH 创建 SOCKS5 代理实例
 func NewSOCKS5OverSSH(cfg *config.Config, log *logger.Logger, sshClient *SSHClient, r *router.Router) (*SOCKS5OverSSH, error) {
-	// 创建自定义 Dialer
-	sshDialer := &SSHDialer{
-		ssh:    sshClient,
-		router: r,
-		logger: log,
-	}
-
-	// 配置 socks5 库
-	conf := &socks5.Config{
-		Dial:   sshDialer.Dial, // 注入我们的拨号逻辑
-		Logger: nil,            // fixme: 注入日志（需要适配接口，或者置为 nil 自己打日志）
-	}
-
-	server, err := socks5.New(conf)
-	if err != nil {
-		return nil, fmt.Errorf("创建 SOCKS5 server 失败: %v", err)
-	}
-
 	return &SOCKS5OverSSH{
-		server: server,
 		cfg:    cfg,
 		logger: log,
+		ssh:    sshClient,
+		router: r,
 	}, nil
 }
 
-// Start 启动监听
+// Start 启动 SOCKS5 监听循环
 func (s *SOCKS5OverSSH) Start() error {
-	address := s.cfg.SocksAddr // 需要在 Config 里加这个字段
-	if address == "" {
-		return nil // 没配地址就不启动
+	addr := s.cfg.SocksAddr
+	if addr == "" {
+		s.logger.Debug("SOCKS5 代理地址未配置，跳过启动")
+		return nil
 	}
 
-	l, err := net.Listen("tcp", address) // <--- 手动创建 Listener
+	l, err := net.Listen("tcp", addr)
 	if err != nil {
-		return err
+		return fmt.Errorf("SOCKS5 监听启动失败: %w", err)
 	}
-	s.listener = l // <--- 保存 Listener
-	s.logger.Infof("SOCKS5 代理服务器启动在 %s", address)
-	return s.server.Serve(l)
+
+	s.mu.Lock()
+	s.listener = l
+	s.mu.Unlock()
+
+	s.logger.Infof("SOCKS5 代理已启动，监听地址: %s (支持远程 DNS 解析)", addr)
+
+	for {
+		conn, err := l.Accept()
+		if err != nil {
+			s.mu.Lock()
+			closing := s.listener == nil
+			s.mu.Unlock()
+
+			if closing {
+				return nil // 正常退出
+			}
+			s.logger.Errorf("SOCKS5 Accept 错误: %v", err)
+			continue
+		}
+
+		// 异步处理每个连接
+		go s.handleConnection(conn)
+	}
 }
 
-// Close 关闭 SOCKS5 代理服务
+// Close 优雅关闭服务
 func (s *SOCKS5OverSSH) Close() error {
-	if s.listener != nil {
-		return s.listener.Close()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.listener == nil {
+		return nil
 	}
-	return nil
+
+	s.logger.Info("正在关闭 SOCKS5 代理服务...")
+	err := s.listener.Close()
+	s.listener = nil // 置空，防止重复关闭
+	return err
+}
+
+// handleConnection 处理单个 SOCKS5 连接的主逻辑
+func (s *SOCKS5OverSSH) handleConnection(conn net.Conn) {
+	defer conn.Close()
+	clientAddr := conn.RemoteAddr().String()
+
+	// 1. 协商阶段 (Handshake)
+	// Client: [VER, NMETHODS, METHODS...]
+	// Server: [VER, METHOD]
+	if err := s.handshake(conn); err != nil {
+		s.logger.Debugf("[%s] SOCKS5 协商失败: %v", clientAddr, err)
+		return
+	}
+
+	// 2. 请求阶段 (Request)
+	// Client: [VER, CMD, RSV, ATYP, DST.ADDR, DST.PORT]
+	targetAddr, hostForRoute, err := s.readRequest(conn)
+	if err != nil {
+		s.logger.Debugf("[%s] SOCKS5 请求解析失败: %v", clientAddr, err)
+		return
+	}
+
+	// 3. 路由与连接 (Dial)
+	start := time.Now()
+	destConn, ruleAction, err := s.dialTarget(targetAddr, hostForRoute)
+	if err != nil {
+		s.logger.Warnf("[%SOCKS5] 连接目标 %s 失败: %v", targetAddr, err)
+		s.reply(conn, 0x05) // 0x05: Connection refused
+		return
+	}
+	defer destConn.Close()
+
+	// 4. 回复客户端成功 (Reply Success)
+	// Server: [VER, REP, RSV, ATYP, BND.ADDR, BND.PORT]
+	s.reply(conn, 0x00) // 0x00: Succeeded
+
+	s.logger.Infof("[SOCKS5] 建立连接 -> %s (规则: %s)", targetAddr, ruleAction)
+
+	// 5. 数据传输 (Transfer)
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Browser -> SSH/Target
+	go func() {
+		defer wg.Done()
+		io.Copy(destConn, conn)
+		// 如果是 TCP 连接，通常不需要手动 CloseWrite，但在某些场景下可以加速关闭
+		if c, ok := destConn.(*net.TCPConn); ok {
+			c.CloseWrite()
+		}
+	}()
+
+	// SSH/Target -> Browser
+	go func() {
+		defer wg.Done()
+		io.Copy(conn, destConn)
+		if c, ok := conn.(*net.TCPConn); ok {
+			c.CloseWrite()
+		}
+	}()
+
+	wg.Wait()
+	s.logger.Debugf("[%s] 连接断开: %s, 耗时: %v", clientAddr, targetAddr, time.Since(start))
+}
+
+// handshake 处理 SOCKS5 认证协商
+func (s *SOCKS5OverSSH) handshake(conn net.Conn) error {
+	buf := make([]byte, 256)
+	// 读取: VER, NMETHODS
+	if _, err := io.ReadFull(conn, buf[:2]); err != nil {
+		return err
+	}
+	if buf[0] != 0x05 {
+		return fmt.Errorf("不支持的 SOCKS 版本: %d", buf[0])
+	}
+	nmethods := int(buf[1])
+	// 读取: METHODS
+	if _, err := io.ReadFull(conn, buf[:nmethods]); err != nil {
+		return err
+	}
+
+	// 回复: VER=5, METHOD=0 (No Authentication Required)
+	_, err := conn.Write([]byte{0x05, 0x00})
+	return err
+}
+
+// readRequest 读取并解析客户端请求，返回完整目标地址(host:port)和用于路由匹配的主机名
+func (s *SOCKS5OverSSH) readRequest(conn net.Conn) (string, string, error) {
+	header := make([]byte, 4)
+	if _, err := io.ReadFull(conn, header); err != nil {
+		return "", "", err
+	}
+
+	if header[1] != 0x01 { // CMD: 0x01 = CONNECT
+		s.reply(conn, 0x07) // Command not supported
+		return "", "", fmt.Errorf("不支持的命令: %d", header[1])
+	}
+
+	var host string
+	switch header[3] { // ATYP
+	case 0x01: // IPv4
+		ip := make([]byte, 4)
+		if _, err := io.ReadFull(conn, ip); err != nil {
+			return "", "", err
+		}
+		host = net.IP(ip).String()
+	case 0x03: // Domain Name (关键：直接读取域名，不进行本地 DNS 解析)
+		lenBuf := make([]byte, 1)
+		if _, err := io.ReadFull(conn, lenBuf); err != nil {
+			return "", "", err
+		}
+		domainLen := int(lenBuf[0])
+		domain := make([]byte, domainLen)
+		if _, err := io.ReadFull(conn, domain); err != nil {
+			return "", "", err
+		}
+		host = string(domain)
+	case 0x04: // IPv6
+		ip := make([]byte, 16)
+		if _, err := io.ReadFull(conn, ip); err != nil {
+			return "", "", err
+		}
+		host = net.IP(ip).String()
+	default:
+		s.reply(conn, 0x08) // Address type not supported
+		return "", "", fmt.Errorf("不支持的地址类型: %d", header[3])
+	}
+
+	portBuf := make([]byte, 2)
+	if _, err := io.ReadFull(conn, portBuf); err != nil {
+		return "", "", err
+	}
+	port := binary.BigEndian.Uint16(portBuf)
+
+	targetAddr := net.JoinHostPort(host, strconv.Itoa(int(port)))
+	return targetAddr, host, nil
+}
+
+// dialTarget 根据路由规则连接目标
+func (s *SOCKS5OverSSH) dialTarget(addr string, hostForRoute string) (net.Conn, string, error) {
+	action := router.ActionProxy
+
+	// 1. 路由判断
+	if s.router != nil {
+		action = s.router.Match(hostForRoute)
+	}
+
+	// 2. 根据动作执行连接
+	if action == router.ActionDirect {
+		s.logger.Debugf("[SOCKS5] 路由直连: %s", addr)
+		conn, err := net.DialTimeout("tcp", addr, s.cfg.Timeout)
+		return conn, "DIRECT", err
+	}
+
+	// 默认走 Proxy (SSH)
+	// SSH 服务器会在远端进行 DNS 解析，从而解决本地 DNS 污染和 HSTS 问题
+	s.logger.Debugf("[SOCKS5] SSH 转发: %s", addr)
+	conn, err := s.ssh.Dial("tcp", addr)
+	return conn, "PROXY", err
+}
+
+// reply 发送 SOCKS5 响应包
+func (s *SOCKS5OverSSH) reply(conn net.Conn, rep byte) {
+	// [VER, REP, RSV, ATYP, BND.ADDR(4), BND.PORT(2)]
+	// 这里 BND.ADDR 和 BND.PORT 填全 0 即可，客户端通常不关心
+	conn.Write([]byte{0x05, rep, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 }
