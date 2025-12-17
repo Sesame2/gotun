@@ -94,7 +94,7 @@ var rootCmd = &cobra.Command{
 
 		var proxyMgr *sysproxy.Manager
 		if cfg.SystemProxy {
-			proxyMgr = sysproxy.NewManager(log, cfg.ListenAddr)
+			proxyMgr = sysproxy.NewManager(log, cfg.ListenAddr, cfg.SocksAddr)
 		}
 
 		sigChan := make(chan os.Signal, 1)
