@@ -135,7 +135,12 @@ gotun --listen :8888 user@example.com
 # 自动设置系统代理（默认开启）
 # 若你希望启动时不修改系统代理，请显式关闭：
 gotun --sys-proxy=false user@example.com
+
+# 开启 SOCKS5 代理 (默认 :1080)
+gotun --socks5 :1080 user@example.com
 ```
+
+> **注意**: 使用 SOCKS5 代理配合自定义路由规则时，建议在客户端（如浏览器或代理插件）中开启 "Proxy DNS when using SOCKS5" (远程DNS解析) 选项。否则客户端可能会在本地解析域名为 IP，导致基于域名的路由规则失效。
 
 ### 在浏览器中使用
 
@@ -158,6 +163,7 @@ gotun --sys-proxy=false user@example.com
 | `--identity_file` | `-i` | 用于认证的私钥文件路径 | |
 | `--jump` | `-J` | 跳板机列表,用逗号分隔 (格式: user@host:port) | |
 | `--target` | | 可选的目标网络覆盖 | |
+| `--socks5` | | SOCKS5 代理监听地址 | `:1080` |
 | `--timeout` | | 连接超时时间 | `10s` |
 | `--verbose` | `-v` | 启用详细日志 | `false` |
 | `--log` | | 日志文件路径 | 输出到标准输出 |
@@ -350,10 +356,10 @@ sudo gotun user@example.com
 - [x] **跳板机 (Jump Host)**: 支持单级和多级SSH跳板机
 - [x] **自定义路由规则**: 支持自定义的规则文件进行流量分流
 - [x] **命令行自动补全**: 基于 Cobra 的智能提示
+- [x] **SOCKS5 代理支持**: 更广泛的协议支持
 - [ ] **RDP网关**：支持RDP远程桌面网关
 - [ ] **托盘 GUI 界面**: 图形化用户界面
 - [ ] **配置文件导出/导入**: 配置管理功能
-- [ ] **SOCKS5 代理支持**: 更广泛的协议支持
 - [ ] **连接池优化**: 提升性能和稳定性
 - [ ] **统计和监控**: 流量统计和连接监控
 
