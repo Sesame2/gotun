@@ -17,6 +17,11 @@ type Config struct {
 	SSHTargetDial   string
 	SSHPort         string   // 添加SSH端口配置
 	SocksAddr       string   // SOCKS5 监听地址
+	TunMode         bool     // 是否启用 TUN 模式
+	TunAddr         string   // TUN 设备 IP
+	TunMask         string   // TUN 设备子网掩码
+	TunRoutes       []string // 需要路由到 TUN 的网段 (CIDR)
+	TunGlobal       bool     // 是否开启全局模式
 	JumpHosts       []string // 跳板机列表
 	Timeout         time.Duration
 	Verbose         bool
@@ -39,6 +44,11 @@ func NewConfig() *Config {
 		SystemProxy:     true,
 		RuleFile:        "",
 		SocksAddr:       "",
+		TunMode:         false,
+		TunAddr:         "10.0.0.1",
+		TunMask:         "255.255.255.0",
+		TunRoutes:       []string{},
+		TunGlobal:       false,
 	}
 }
 

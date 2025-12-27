@@ -13,6 +13,7 @@ import (
 	"github.com/Sesame2/gotun/internal/proxy"
 	"github.com/Sesame2/gotun/internal/router"
 	"github.com/Sesame2/gotun/internal/sysproxy"
+	"github.com/Sesame2/gotun/internal/tun"
 	"github.com/spf13/cobra"
 )
 
@@ -30,6 +31,23 @@ var rootCmd = &cobra.Command{
 它可以帮助您安全地访问内网资源或将远程主机作为网络出口。`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// 检查是否启用 TUN 模式且非 root 用户
+		if cfg.TunMode && os.Geteuid() != 0 {
+			fmt.Println("TUN 模式需要 root 权限，尝试使用 sudo 重新启动...")
+
+			exe, err := os.Executable()
+			if err != nil {
+				return fmt.Errorf("无法获取当前可执行文件路径: %w", err)
+			}
+
+			// 构建 sudo 命令
+			sudoArgs := []string{"sudo", exe}
+			sudoArgs = append(sudoArgs, os.Args[1:]...)
+
+			// 执行 sudo
+			syscall.Exec("/usr/bin/sudo", sudoArgs, os.Environ())
+			return nil
+		}
 
 		// 从参数填充SSH用户和服务器
 		user, host, err := parseSSHTarget(args[0])
@@ -97,6 +115,15 @@ var rootCmd = &cobra.Command{
 			proxyMgr = sysproxy.NewManager(log, cfg.ListenAddr, cfg.SocksAddr)
 		}
 
+		// 5. 初始化 TUN 模式
+		var tunService *tun.TunService
+		if cfg.TunMode {
+			tunService, err = tun.NewTunService(cfg, log, sshClient)
+			if err != nil {
+				return fmt.Errorf("TUN服务初始化失败: %w", err)
+			}
+		}
+
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
@@ -112,6 +139,15 @@ var rootCmd = &cobra.Command{
 			}
 		}()
 
+		if tunService != nil {
+			go func() {
+				if err := tunService.Start(); err != nil {
+					log.Errorf("TUN服务启动失败: %v", err)
+					sigChan <- syscall.SIGTERM
+				}
+			}()
+		}
+
 		if socksProxy != nil {
 			go func() {
 				if err := socksProxy.Start(); err != nil {
@@ -125,6 +161,9 @@ var rootCmd = &cobra.Command{
 		fmt.Println("HTTP Proxy:", "http://"+cfg.ListenAddr)
 		if cfg.SocksAddr != "" {
 			fmt.Println("SOCKS5 Proxy:", "socks5://"+cfg.SocksAddr)
+		}
+		if cfg.TunMode {
+			fmt.Printf("TUN Mode: Enabled (IP: %s, Mask: %s)\n", cfg.TunAddr, cfg.TunMask)
 		}
 
 		if len(cfg.JumpHosts) > 0 {
@@ -160,6 +199,12 @@ var rootCmd = &cobra.Command{
 			}
 		}
 
+		if tunService != nil {
+			if err := tunService.Close(); err != nil {
+				log.Errorf("关闭TUN服务失败: %v", err)
+			}
+		}
+
 		return nil
 	},
 }
@@ -178,7 +223,12 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfg.LogFile, "log", "", "日志文件路径")
 	rootCmd.PersistentFlags().BoolVar(&cfg.SystemProxy, "sys-proxy", true, "自动设置/恢复系统代理")
 	rootCmd.PersistentFlags().StringVar(&cfg.RuleFile, "rules", "", "代理规则配置文件路径")
-	rootCmd.PersistentFlags().StringVar(&cfg.SocksAddr, "socks5", ":1080", "SOCKS5 代理监听地址")
+	rootCmd.PersistentFlags().StringVar(&cfg.SocksAddr, "socks5", "", "SOCKS5 代理监听地址")
+	rootCmd.PersistentFlags().BoolVar(&cfg.TunMode, "tun", false, "启用 TUN 模式 (TCP over SSH)")
+	rootCmd.PersistentFlags().StringVar(&cfg.TunAddr, "tun-addr", "10.0.0.1", "TUN 设备 IP 地址")
+	rootCmd.PersistentFlags().StringVar(&cfg.TunMask, "tun-mask", "255.255.255.0", "TUN 设备子网掩码")
+	rootCmd.PersistentFlags().StringSliceVar(&cfg.TunRoutes, "tun-routes", []string{}, "需要路由到 TUN 的网段 (CIDR), 用逗号分隔")
+	rootCmd.PersistentFlags().BoolVarP(&cfg.TunGlobal, "global", "g", false, "启用全局 TUN 模式 (转发所有流量)")
 }
 
 func Execute(version string) {
