@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Sesame2/gotun/internal/assets"
 	"github.com/Sesame2/gotun/internal/config"
 	"github.com/Sesame2/gotun/internal/logger"
 	"github.com/Sesame2/gotun/internal/proxy"
@@ -81,6 +82,11 @@ func NewTunService(cfg *config.Config, log *logger.Logger, sshClient *proxy.SSHC
 
 // Start 启动 TUN 设备和协议栈
 func (t *TunService) Start() error {
+	// 0. (Windows Only) 释放 Wintun DLL
+	if err := assets.SetupWintun(); err != nil {
+		return fmt.Errorf("准备 Wintun 驱动失败: %v", err)
+	}
+
 	// 1. 创建 TUN 设备 (使用 wireguard-go)
 	// 在 Windows 上，这将使用 Wintun (L3)
 	// 在 macOS 上，必须使用 utun[0-9]* 格式，通常传 "utun" 会自动分配
