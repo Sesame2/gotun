@@ -34,6 +34,11 @@ var rootCmd = &cobra.Command{
 它可以帮助您安全地访问内网资源或将远程主机作为网络出口。`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// 自动开启 TUN 模式: 如果指定了 Global, Route 或 NAT
+		if cfg.TunGlobal || len(cfg.TunRoute) > 0 || len(aliasFlags) > 0 {
+			cfg.TunMode = true
+		}
+
 		// 检查是否启用 TUN 模式且非 root 用户 (Windows 除外)
 		if cfg.TunMode && runtime.GOOS != "windows" && os.Geteuid() != 0 {
 			fmt.Println("TUN 模式需要 root 权限，尝试使用 sudo 重新启动...")
@@ -215,7 +220,7 @@ var rootCmd = &cobra.Command{
 			fmt.Println("SOCKS5 Proxy:", "socks5://"+cfg.SocksAddr)
 		}
 		if cfg.TunMode {
-			fmt.Printf("TUN Mode: Enabled (IP: %s, Mask: %s)\n", cfg.TunAddr, cfg.TunMask)
+			fmt.Printf("TUN Mode: Enabled (CIDR: %s)\n", cfg.TunCIDR)
 		}
 
 		if len(cfg.JumpHosts) > 0 {
@@ -263,25 +268,34 @@ var rootCmd = &cobra.Command{
 
 // init函数在main函数之前执行，定义原来所有的flag
 func init() {
-	// 使用 PersistentFlags，这样未来如果添加子命令，它们也能继承这些flag
-	rootCmd.PersistentFlags().StringVarP(&cfg.ListenAddr, "listen", "l", ":8080", "本地HTTP代理监听地址")
+	// --- Group 1: SSH Connection ---
 	rootCmd.PersistentFlags().StringVarP(&cfg.SSHPort, "port", "p", "22", "SSH服务器端口")
 	rootCmd.PersistentFlags().StringVar(&cfg.SSHPassword, "pass", "", "SSH密码 (不安全, 建议使用交互式认证)")
 	rootCmd.PersistentFlags().StringVarP(&cfg.SSHKeyFile, "identity_file", "i", "", "用于认证的私钥文件路径")
 	rootCmd.PersistentFlags().StringSliceVarP(&cfg.JumpHosts, "jump", "J", []string{}, "跳板机列表,用逗号分隔 (格式: user@host:port)")
-	rootCmd.PersistentFlags().StringVar(&cfg.SSHTargetDial, "target", "", "可选的目标网络覆盖")
 	rootCmd.PersistentFlags().DurationVar(&cfg.Timeout, "timeout", 10*time.Second, "连接超时时间")
+
+	// --- Group 2: Proxy Services ---
+	rootCmd.PersistentFlags().StringVarP(&cfg.ListenAddr, "listen", "l", ":8080", "本地HTTP代理监听地址 [已废弃，推荐使用 --http]")
+	rootCmd.PersistentFlags().StringVar(&cfg.ListenAddr, "http", ":8080", "本地HTTP代理监听地址 (别名: --listen)")
+	rootCmd.PersistentFlags().StringVar(&cfg.SocksAddr, "socks5", "", "SOCKS5 代理监听地址 (例如 :1080)")
+	rootCmd.PersistentFlags().BoolVar(&cfg.SystemProxy, "sys-proxy", true, "自动设置/恢复系统代理")
+	rootCmd.PersistentFlags().StringVar(&cfg.HTTPUpstream, "http-upstream", "", "强制将所有HTTP请求转发到此上游 (格式: host:port)")
+	// 兼容旧参数 target (隐藏)
+	rootCmd.PersistentFlags().StringVar(&cfg.HTTPUpstream, "target", "", "DEPRECATED: use --http-upstream")
+	rootCmd.PersistentFlags().MarkHidden("target")
+
+	// --- Group 3: TUN Mode ---
+	rootCmd.PersistentFlags().BoolVar(&cfg.TunMode, "tun", false, "启用 TUN 模式 (VPN 模式)")
+	rootCmd.PersistentFlags().BoolVarP(&cfg.TunGlobal, "tun-global", "g", false, "启用全局 TUN 模式 (转发所有流量)")
+	rootCmd.PersistentFlags().StringVar(&cfg.TunCIDR, "tun-ip", "10.0.0.1/24", "TUN 设备 CIDR 地址")
+	rootCmd.PersistentFlags().StringSliceVar(&cfg.TunRoute, "tun-route", []string{}, "添加静态路由到 TUN (CIDR格式, 可多次使用)")
+	rootCmd.PersistentFlags().StringSliceVar(&aliasFlags, "tun-nat", []string{}, "NAT 映射规则 (格式: SrcCIDR:DstCIDR)")
+
+	// --- Group 4: General ---
 	rootCmd.PersistentFlags().BoolVarP(&cfg.Verbose, "verbose", "v", false, "启用详细日志")
 	rootCmd.PersistentFlags().StringVar(&cfg.LogFile, "log", "", "日志文件路径")
-	rootCmd.PersistentFlags().BoolVar(&cfg.SystemProxy, "sys-proxy", true, "自动设置/恢复系统代理")
 	rootCmd.PersistentFlags().StringVar(&cfg.RuleFile, "rules", "", "代理规则配置文件路径")
-	rootCmd.PersistentFlags().StringVar(&cfg.SocksAddr, "socks5", "", "SOCKS5 代理监听地址")
-	rootCmd.PersistentFlags().BoolVar(&cfg.TunMode, "tun", false, "启用 TUN 模式 (TCP over SSH)")
-	rootCmd.PersistentFlags().StringVar(&cfg.TunAddr, "tun-addr", "10.0.0.1", "TUN 设备 IP 地址")
-	rootCmd.PersistentFlags().StringVar(&cfg.TunMask, "tun-mask", "255.255.255.0", "TUN 设备子网掩码")
-	rootCmd.PersistentFlags().StringSliceVar(&cfg.TunRoutes, "tun-routes", []string{}, "需要路由到 TUN 的网段 (CIDR), 用逗号分隔")
-	rootCmd.PersistentFlags().BoolVarP(&cfg.TunGlobal, "global", "g", false, "启用全局 TUN 模式 (转发所有流量)")
-	rootCmd.PersistentFlags().StringSliceVar(&aliasFlags, "alias", []string{}, "IP别名映射，格式: 虚拟IP:目标地址 (例如 10.10.10.10:127.0.0.1)")
 }
 
 func Execute(version string) {

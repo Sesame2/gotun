@@ -49,12 +49,20 @@ type TunService struct {
 
 // NewTunService 创建 TUN 服务
 func NewTunService(cfg *config.Config, log *logger.Logger, sshClient *proxy.SSHClient) (*TunService, error) {
-	// 计算 Peer IP (简单起见，IP+1)
-	tunIP := net.ParseIP(cfg.TunAddr).To4()
+	// 解析 CIDR
+	ip, ipNet, err := net.ParseCIDR(cfg.TunCIDR)
+	if err != nil {
+		return nil, fmt.Errorf("无效的 TUN CIDR: %s (%v)", cfg.TunCIDR, err)
+	}
+	tunIP := ip.To4()
 	if tunIP == nil {
-		return nil, fmt.Errorf("无效的 TUN IP: %s", cfg.TunAddr)
+		return nil, fmt.Errorf("只支持 IPv4 TUN 地址: %s", cfg.TunCIDR)
 	}
 
+	// 计算 Mask
+	mask := net.IP(ipNet.Mask).String()
+
+	// 计算 Peer IP (简单起见，IP+1)
 	peerIP := make(net.IP, len(tunIP))
 	copy(peerIP, tunIP)
 	peerIP[3]++ // +1
@@ -63,10 +71,10 @@ func NewTunService(cfg *config.Config, log *logger.Logger, sshClient *proxy.SSHC
 		cfg:     cfg,
 		logger:  log,
 		ssh:     sshClient,
-		tunIP:   cfg.TunAddr,
-		tunMask: cfg.TunMask,
+		tunIP:   tunIP.String(),
+		tunMask: mask, // 内部仍使用 mask 字符串
 		peerIP:  peerIP.String(),
-		routes:  cfg.TunRoutes,
+		routes:  cfg.TunRoute,
 		global:  cfg.TunGlobal,
 	}, nil
 }
