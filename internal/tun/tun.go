@@ -140,12 +140,10 @@ func (t *TunService) Start() error {
 		}
 	}
 
-	// 配置别名路由 (Virtual IP)
-	for vip := range t.cfg.IPAliases {
-		// 添加 /32 路由 (单机路由)
-		// 添加 /32 路由 (单机路由)
-		cidr := fmt.Sprintf("%s/32", vip)
-		t.logger.Infof("[TUN] 添加别名路由: %s -> TUN", vip)
+	// 配置别名路由 (Subnet/IP Mapping)
+	for _, sas := range t.cfg.SubnetAliases {
+		cidr := sas.Src.String()
+		t.logger.Infof("[TUN] 添加别名路由: %s -> TUN", cidr)
 		if err := t.addRoute(cidr, t.tunIP, realName); err != nil {
 			t.logger.Warnf("[TUN] 添加别名路由失败 %s: %v", cidr, err)
 		}
@@ -225,10 +223,26 @@ func (t *TunService) initNetstack() {
 
 		// --- 地址重写逻辑 (NAT) ---
 		targetHost := destIP
-		if realHost, ok := t.cfg.IPAliases[destIP]; ok {
-			t.logger.Infof("[TUN] 命中 IP 映射: %s -> %s", destIP, realHost)
-			targetHost = realHost
+		parsedDestIP := net.ParseIP(destIP)
+
+		if parsedDestIP != nil {
+			parsedDestIP = parsedDestIP.To4() // Ensure IPv4
+			if parsedDestIP != nil {
+				for _, rule := range t.cfg.SubnetAliases {
+					if rule.Src.Contains(parsedDestIP) {
+						// 计算偏移量: destIP - rule.Src.IP
+						offset := ipSub(parsedDestIP, rule.Src.IP)
+						// 计算新目标: rule.Dst.IP + offset
+						realTargetIP := ipAdd(rule.Dst.IP, offset)
+
+						targetHost = realTargetIP.String()
+						t.logger.Infof("[TUN] 命中 NAT 规则: %s -> %s (Offset: %d)", destIP, targetHost, offset)
+						break
+					}
+				}
+			}
 		}
+
 		targetAddr := fmt.Sprintf("%s:%d", targetHost, destPort)
 		// ------------------------
 
@@ -355,6 +369,9 @@ func (t *TunService) pumpTunToStack() {
 	for {
 		n, err := t.dev.Read(bufs, sizes, offset)
 		if err != nil {
+			if strings.Contains(err.Error(), "file already closed") || strings.Contains(err.Error(), "closed network connection") {
+				return
+			}
 			t.logger.Errorf("[TUN] 读取设备失败: %v", err)
 			return
 		}
@@ -393,6 +410,9 @@ func (t *TunService) pumpStackToTun() {
 
 		_, err := t.dev.Write([][]byte{buf}, offset)
 		if err != nil {
+			if strings.Contains(err.Error(), "file already closed") || strings.Contains(err.Error(), "closed network connection") {
+				return
+			}
 			t.logger.Errorf("[TUN] 写入设备失败: %v", err)
 			return
 		}
@@ -621,46 +641,81 @@ func (t *TunService) checkRouteConflicts() {
 		return
 	}
 
-	for _, iface := range ifaces {
-		// 跳过 Loopback 和 Down 的接口
-		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
-			continue
-		}
+	sshHost := t.cfg.SSHServer
+	if host, _, err := net.SplitHostPort(sshHost); err == nil {
+		sshHost = host
+	}
+	sshIPs, _ := net.LookupIP(sshHost)
 
-		addrs, err := iface.Addrs()
+	// check conflict with t.routes & SubnetAliases
+	checkConflict := func(targetCIDR string, targetName string) {
+		_, network, err := net.ParseCIDR(targetCIDR)
 		if err != nil {
-			continue
+			return
 		}
 
-		for _, addr := range addrs {
-			var ip net.IP
-			switch v := addr.(type) {
-			case *net.IPNet:
-				ip = v.IP
-			case *net.IPAddr:
-				ip = v.IP
+		// 1. 检查 SSH Server 死循环
+		for _, sshIP := range sshIPs {
+			sshIPV4 := sshIP.To4()
+			if sshIPV4 != nil && network.Contains(sshIPV4) {
+				t.logger.Fatalf("[TUN] ❌ 致命错误: SSH 服务器 IP %s 包含在路由网段 %s 中！这将导致死循环 (SSH 流量被 TUN 拦截)。请调整路由或别名设置。", sshIPV4, targetCIDR)
 			}
+		}
 
-			if ip == nil || ip.IsLoopback() {
+		// 2. 检查本机网卡冲突
+		for _, iface := range ifaces {
+			// 跳过 Loopback 和 Down 的接口
+			if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
 				continue
 			}
-			// 只检测 IPv4
-			ip = ip.To4()
-			if ip == nil {
-				continue
-			}
-
-			// check conflict with t.routes
-			for _, route := range t.routes {
-				_, network, err := net.ParseCIDR(route)
-				if err != nil {
+			addrs, _ := iface.Addrs()
+			for _, addr := range addrs {
+				var ip net.IP
+				switch v := addr.(type) {
+				case *net.IPNet:
+					ip = v.IP
+				case *net.IPAddr:
+					ip = v.IP
+				}
+				ip = ip.To4()
+				if ip == nil || ip.IsLoopback() {
 					continue
 				}
 
 				if network.Contains(ip) {
-					t.logger.Warnf("[TUN] ⚠️ 路由冲突警告: 请求的路由 %s 包含了本机网卡 %s 的 IP %s。这可能导致流量优先走物理网卡而跳过 TUN，导致代理不生效！", route, iface.Name, ip.String())
+					t.logger.Warnf("[TUN] ⚠️ 路由冲突警告: 请求的路由 %s 包含了本机网卡 %s 的 IP %s。这可能导致流量优先走物理网卡而跳过 TUN，导致代理不生效！", targetCIDR, iface.Name, ip.String())
 				}
 			}
 		}
 	}
+
+	for _, route := range t.routes {
+		checkConflict(route, "User Route")
+	}
+	for _, alias := range t.cfg.SubnetAliases {
+		checkConflict(alias.Src.String(), "Alias Route")
+	}
+}
+
+// Helper functions for IP arithmetic
+func ipToUint32(ip net.IP) uint32 {
+	if len(ip) == 16 {
+		return binary.BigEndian.Uint32(ip[12:16])
+	}
+	return binary.BigEndian.Uint32(ip)
+}
+
+func uint32ToIP(n uint32) net.IP {
+	ip := make(net.IP, 4)
+	binary.BigEndian.PutUint32(ip, n)
+	return ip
+}
+
+func ipAdd(ip net.IP, offset uint32) net.IP {
+	val := ipToUint32(ip)
+	return uint32ToIP(val + offset)
+}
+
+func ipSub(a, b net.IP) uint32 {
+	return ipToUint32(a) - ipToUint32(b)
 }

@@ -69,13 +69,49 @@ var rootCmd = &cobra.Command{
 		for _, alias := range aliasFlags {
 			parts := strings.Split(alias, ":")
 			if len(parts) != 2 {
-				return fmt.Errorf("无效的别名格式: %s, 应为 虚拟IP:目标地址", alias)
+				return fmt.Errorf("无效的别名格式: %s, 应为 Src:Dst (例如 10.0.0.1:192.168.1.1 或 10.0.0.0/24:192.168.1.0/24)", alias)
 			}
-			// 简单的 IP 校验
-			if net.ParseIP(parts[0]) == nil {
-				return fmt.Errorf("无效的虚拟IP: %s", parts[0])
+
+			// Helper: parse IP or CIDR to *net.IPNet
+			parseNet := func(s string) (*net.IPNet, error) {
+				// 尝试解析为 CIDR
+				_, ipNet, err := net.ParseCIDR(s)
+				if err == nil {
+					return ipNet, nil
+				}
+				// 尝试解析为单 IP
+				ip := net.ParseIP(s)
+				if ip == nil {
+					return nil, fmt.Errorf("无效的 IP 或网段: %s", s)
+				}
+				// 转换为 /32 (IPv4)
+				ip = ip.To4()
+				if ip == nil {
+					return nil, fmt.Errorf("不支持 IPv6: %s", s)
+				}
+				return &net.IPNet{IP: ip, Mask: net.CIDRMask(32, 32)}, nil
 			}
-			cfg.IPAliases[parts[0]] = parts[1]
+
+			srcNet, err := parseNet(parts[0])
+			if err != nil {
+				return err
+			}
+			dstNet, err := parseNet(parts[1])
+			if err != nil {
+				return err
+			}
+
+			// 校验掩码大小是否一致
+			srcSize, _ := srcNet.Mask.Size()
+			dstSize, _ := dstNet.Mask.Size()
+			if srcSize != dstSize {
+				return fmt.Errorf("源网段和目标网段掩码长度不一致: %s (%d) != %s (%d)", parts[0], srcSize, parts[1], dstSize)
+			}
+
+			cfg.SubnetAliases = append(cfg.SubnetAliases, config.SubnetAlias{
+				Src: srcNet,
+				Dst: dstNet,
+			})
 		}
 
 		// 验证配置
