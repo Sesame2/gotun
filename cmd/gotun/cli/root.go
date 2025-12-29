@@ -2,8 +2,10 @@ package cli
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -18,8 +20,9 @@ import (
 )
 
 var (
-	Version = "dev"
-	cfg     = config.NewConfig()
+	Version    = "dev"
+	cfg        = config.NewConfig()
+	aliasFlags []string
 )
 
 // rootCmd 代表不带任何子命令时的基础命令
@@ -31,8 +34,8 @@ var rootCmd = &cobra.Command{
 它可以帮助您安全地访问内网资源或将远程主机作为网络出口。`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// 检查是否启用 TUN 模式且非 root 用户
-		if cfg.TunMode && os.Geteuid() != 0 {
+		// 检查是否启用 TUN 模式且非 root 用户 (Windows 除外)
+		if cfg.TunMode && runtime.GOOS != "windows" && os.Geteuid() != 0 {
 			fmt.Println("TUN 模式需要 root 权限，尝试使用 sudo 重新启动...")
 
 			exe, err := os.Executable()
@@ -60,6 +63,19 @@ var rootCmd = &cobra.Command{
 		// 组合服务器地址和端口
 		if cfg.SSHServer != "" && !strings.Contains(cfg.SSHServer, ":") {
 			cfg.SSHServer = fmt.Sprintf("%s:%s", cfg.SSHServer, cfg.SSHPort)
+		}
+
+		// 解析 alias 参数到 Config
+		for _, alias := range aliasFlags {
+			parts := strings.Split(alias, ":")
+			if len(parts) != 2 {
+				return fmt.Errorf("无效的别名格式: %s, 应为 虚拟IP:目标地址", alias)
+			}
+			// 简单的 IP 校验
+			if net.ParseIP(parts[0]) == nil {
+				return fmt.Errorf("无效的虚拟IP: %s", parts[0])
+			}
+			cfg.IPAliases[parts[0]] = parts[1]
 		}
 
 		// 验证配置
@@ -229,6 +245,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfg.TunMask, "tun-mask", "255.255.255.0", "TUN 设备子网掩码")
 	rootCmd.PersistentFlags().StringSliceVar(&cfg.TunRoutes, "tun-routes", []string{}, "需要路由到 TUN 的网段 (CIDR), 用逗号分隔")
 	rootCmd.PersistentFlags().BoolVarP(&cfg.TunGlobal, "global", "g", false, "启用全局 TUN 模式 (转发所有流量)")
+	rootCmd.PersistentFlags().StringSliceVar(&aliasFlags, "alias", []string{}, "IP别名映射，格式: 虚拟IP:目标地址 (例如 10.10.10.10:127.0.0.1)")
 }
 
 func Execute(version string) {
