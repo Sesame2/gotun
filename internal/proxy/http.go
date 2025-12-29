@@ -86,9 +86,10 @@ func (p *HTTPOverSSH) handlePlainHTTP(w http.ResponseWriter, req *http.Request) 
 	p.logger.Infof("来自 %s 的请求: %s %s", req.RemoteAddr, req.Method, req.URL.String())
 
 	targetAddr := req.URL.Host
-	if p.cfg.SSHTargetDial != "" {
-		p.logger.Debugf("使用指定的目标地址覆盖: %s", p.cfg.SSHTargetDial)
-		targetAddr = p.cfg.SSHTargetDial
+	// 检查是否强制了上游转发
+	if p.cfg.HTTPUpstream != "" {
+		targetAddr = p.cfg.HTTPUpstream
+		p.logger.Infof("Upstream forced to %s", targetAddr)
 	}
 
 	if !strings.Contains(targetAddr, ":") {

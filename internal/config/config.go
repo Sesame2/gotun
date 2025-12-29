@@ -21,15 +21,14 @@ type Config struct {
 	SSHUser         string
 	SSHPassword     string
 	SSHKeyFile      string
-	SSHTargetDial   string
+	HTTPUpstream    string        // 强制 HTTP 上游 (原 SSHTargetDial)
 	SSHPort         string        // 添加SSH端口配置
 	SocksAddr       string        // SOCKS5 监听地址
 	TunMode         bool          // 是否启用 TUN 模式
-	TunAddr         string        // TUN 设备 IP
-	TunMask         string        // TUN 设备子网掩码
-	TunRoutes       []string      // 需要路由到 TUN 的网段 (CIDR)
+	TunCIDR         string        // TUN 设备 CIDR (e.g. 10.0.0.1/24)
+	TunRoute        []string      // 需要路由到 TUN 的网段
 	TunGlobal       bool          // 是否开启全局模式
-	SubnetAliases   []SubnetAlias // [新增] 网段/IP映射规则
+	SubnetAliases   []SubnetAlias // 网段/IP映射规则 (NAT)
 	JumpHosts       []string      // 跳板机列表
 	Timeout         time.Duration
 	Verbose         bool
@@ -53,9 +52,8 @@ func NewConfig() *Config {
 		RuleFile:        "",
 		SocksAddr:       "",
 		TunMode:         false,
-		TunAddr:         "10.0.0.1",
-		TunMask:         "255.255.255.0",
-		TunRoutes:       []string{},
+		TunCIDR:         "10.0.0.1/24",
+		TunRoute:        []string{},
 		TunGlobal:       false,
 		SubnetAliases:   []SubnetAlias{},
 	}
