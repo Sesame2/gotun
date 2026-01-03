@@ -70,6 +70,7 @@ Your machine            SSH (tcp/22)                   Bastion                 I
 - Supports single and multi-hop SSH jump hosts
 - Cross-platform: Windows, Linux, macOS
 - Can be used as a system HTTP proxy (optional)
+- TUN Mode: Supports standard TCP-based application proxying
 - Rule-based traffic splitting via configuration file
 - Shell completion support for Bash, Zsh, Fish, PowerShell
 - Structured logging and verbose mode for debugging
@@ -164,22 +165,22 @@ If system proxy support is enabled, some platforms can be configured automatical
 
 ## Command-line options
 
-| Flag              | Short | Description                                       | Default      |
-|-------------------|-------|---------------------------------------------------|--------------|
-| `--listen`        | `-l`  | Local HTTP proxy bind address                     | `:8080`      |
-| `--port`          | `-p`  | SSH server port                                   | `22`         |
-| `--pass`          |       | SSH password (not recommended; use interactively) |              |
-| `--identity_file` | `-i`  | Private key file path                             |              |
-| `--jump`          | `-J`  | Comma-separated jump hosts (`user@host:port`)     |              |
-| `--target`        |       | Optional target network scope/coverage            |              |
-| `--socks5`        |       | SOCKS5 proxy bind address                         | `:1080`      |
-| `--timeout`       |       | SSH connection timeout                            | `10s`        |
-| `--verbose`       | `-v`  | Enable verbose logging                            | `false`      |
-| `--log`           |       | Log file path                                     | stdout       |
-| `--sys-proxy`     |       | Enable automatic system proxy configuration       | `true`       |
-| `--rules`         |       | Path to routing rules configuration file          |              |
-
-Run `gotun --help` for the full list of options.
+| Flag | Short | Description | Default |
+|------|-------|-------------|---------|
+| `--http` | | Local HTTP proxy listen address (alias for `--listen`) | `:8080` |
+| `--listen` | `-l` | [Deprecated] Same as `--http` | `:8080` |
+| `--socks5` | | SOCKS5 proxy listen address | `:1080` |
+| `--port` | `-p` | SSH server port | `22` |
+| `--pass` | | SSH password (insecure, interactive preferred) | |
+| `--identity_file` | `-i` | Private key file path | |
+| `--jump` | `-J` | Comma-separated jump hosts (`user@host:port`) | |
+| `--http-upstream` | | Force forward all HTTP requests to this upstream (`host:port`) | |
+| `--target` | | [Deprecated] Same as `--http-upstream` | |
+| `--timeout` | | Connection timeout | `10s` |
+| `--verbose` | `-v` | Enable verbose logging | `false` |
+| `--log` | | Log file path | stdout |
+| `--sys-proxy` | | Auto-configure system proxy | `true` |
+| `--rules` | | Path to routing rules config file | |
 
 ---
 
@@ -312,7 +313,7 @@ Platform notes:
 
 ---
 
-## Rule-based routing (advanced)
+## Rule-based routing (Advanced)
 
 `gotun` can read a Clash-style YAML rules file to decide which traffic is sent via the SSH proxy and which goes directly.
 
@@ -353,7 +354,75 @@ gotun --rules ./rules.yaml user@your_ssh_server.com
 Requests will be matched from top to bottom; the first matching rule applies.
 
 ---
+## TUN Mode (Advanced)
 
+gotun creates a local virtual network interface that intercepts specific (or all) TCP traffic and transparently tunnels it via SSH. This allows applications that don't support proxy settings to access remote resources through the SSH tunnel.
+
+### Why use TUN Mode?
+
+- **Full Application Proxy**: Perfectly supports **RDP (Remote Desktop)**, **Database connections** (MySQL/PostgreSQL), **Redis**, and other TCP-based application protocols.
+- **Zero Config**: In Global Mode, all TCP traffic is routed automatically without per-app configuration.
+- **Network Mapping**: Map a remote internal subnet to your local machine, solving IP conflict issues between local and remote networks.
+
+> **⚠️ Note**: Current TUN Mode only supports **TCP protocol**. UDP traffic and ICMP (ping) are not supported (use `telnet` or `nc -vz` to test connectivity).
+
+### Core Parameters
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--tun` | | Explicitly enable TUN mode (auto-enabled by other TUN flags, optional) |
+| `--tun-global` | `-g` | **Global Mode**: Routes ALL network traffic (auto-handles gateway to prevent SSH drop) |
+| `--tun-route` | | **Split Tunneling**: Route specific CIDRs to TUN (can be repeated) |
+| `--tun-nat` | | **NAT Mapping**: Map local subnet to remote subnet (`LocalCIDR:RemoteCIDR`) |
+| `--tun-ip` | | Internal IP for the TUN interface (default `10.0.0.1/24`) |
+
+### Usage Examples
+
+**1. Global Mode**
+
+Route all local traffic through the remote server.
+
+> **⚠️ Warning**: Global TUN mode might conflict with other software that modifies routing tables (e.g., Clash, ZeroTier). Use with caution or prefer Split Tunneling.
+
+```bash
+# -g automatically enables TUN mode
+sudo gotun -g user@server.com
+```
+
+**2. Split Tunneling**
+
+Route only specific subnets through the tunnel. For example, only traffic to `10.0.0.0/24` goes via SSH:
+
+```bash
+# Traffic to 10.0.0.x goes via SSH, everything else is direct
+sudo gotun --tun-route 10.0.0.0/24 user@server.com
+```
+
+**3. NAT Mapping**
+
+Solve subnet conflicts. For example, remote target is `192.168.0.0/24`, but your local network also uses this range. Map it to a conflict-free local range (e.g., `10.0.0.0/24`).
+
+```bash
+# Access Local 10.0.0.1 -> Auto-NAT -> Remote 192.168.0.1
+sudo gotun --tun-nat 10.0.0.0/24:192.168.0.0/24 user@server.com
+```
+
+> **Note**: 
+> - **Privileges**: TUN mode requires `sudo` (macOS/Linux) or Admin (Windows).
+> - **Windows**: `wintun.dll` is auto-extracted on first run; no manual driver installation needed.
+
+**4. RDP Remote Desktop Example**
+
+Scenario: You need to RDP into a Windows machine at `192.168.2.1` (behind the SSH server), but you can't reach that IP directly. The SSH server (`192.168.2.2`) can reach it.
+
+```bash
+# Route traffic for 192.168.2.0/24 through the SSH tunnel
+sudo gotun --tun-route 192.168.2.0/24 user@192.168.2.2
+```
+
+Once started, open your Remote Desktop Client and connect to `192.168.2.1` directly. It will feel like you are on the same LAN.
+
+---
 ## Troubleshooting
 
 ### Connection issues
@@ -408,10 +477,10 @@ Implemented:
 - [x] Rule-based routing
 - [x] Shell completion for common shells
 - [x] SOCKS5 proxy support
+- [x] TUN Mode: L3 VPN support (Global/Split/NAT)
 
 Planned:
 
-- [ ] RDP gateway support
 - [ ] Tray/GUI frontend
 - [ ] Export/import of configuration profiles
 - [ ] Connection pooling and performance tuning
