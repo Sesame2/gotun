@@ -3,9 +3,16 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 )
+
+// SubnetAlias 定义网段映射规则
+type SubnetAlias struct {
+	Src *net.IPNet
+	Dst *net.IPNet
+}
 
 // Config 存储应用配置
 type Config struct {
@@ -14,10 +21,15 @@ type Config struct {
 	SSHUser         string
 	SSHPassword     string
 	SSHKeyFile      string
-	SSHTargetDial   string
-	SSHPort         string   // 添加SSH端口配置
-	SocksAddr       string   // SOCKS5 监听地址
-	JumpHosts       []string // 跳板机列表
+	HTTPUpstream    string        // 强制 HTTP 上游 (原 SSHTargetDial)
+	SSHPort         string        // 添加SSH端口配置
+	SocksAddr       string        // SOCKS5 监听地址
+	TunMode         bool          // 是否启用 TUN 模式
+	TunCIDR         string        // TUN 设备 CIDR (e.g. 10.0.0.1/24)
+	TunRoute        []string      // 需要路由到 TUN 的网段
+	TunGlobal       bool          // 是否开启全局模式
+	SubnetAliases   []SubnetAlias // 网段/IP映射规则 (NAT)
+	JumpHosts       []string      // 跳板机列表
 	Timeout         time.Duration
 	Verbose         bool
 	LogFile         string
@@ -39,6 +51,11 @@ func NewConfig() *Config {
 		SystemProxy:     true,
 		RuleFile:        "",
 		SocksAddr:       "",
+		TunMode:         false,
+		TunCIDR:         "10.0.0.1/24",
+		TunRoute:        []string{},
+		TunGlobal:       false,
+		SubnetAliases:   []SubnetAlias{},
 	}
 }
 
