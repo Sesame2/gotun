@@ -1,0 +1,28 @@
+# Build outputs
+build/bin/
+*.app
+*.dmg
+*.exe
+*.msi
+
+# Frontend
+frontend/dist/
+frontend/node_modules/
+
+# Wails generated
+wailsjs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Editor
+.vscode/
+.idea/
+
+# Temp
+*.tmp
+*~

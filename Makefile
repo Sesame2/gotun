@@ -20,7 +20,8 @@ GOARCH=$(shell go env GOARCH)
 # 发布平台和架构
 PLATFORMS=linux/amd64 linux/arm64 windows/amd64 windows/arm64 darwin/amd64 darwin/arm64
 
-.PHONY: all build clean test lint vet tidy run help build-all build-release
+.PHONY: all build clean test lint vet tidy run help build-all build-release \
+	gui gui-dev gui-build gui-build-mac gui-build-windows gui-clean
 
 all: lint test build
 
@@ -128,6 +129,8 @@ version:
 # 显示帮助信息
 help:
 	@echo "Make targets:"
+	@echo ""
+	@echo "CLI 构建:"
 	@echo "  build         - Build gotun binary for current platform"
 	@echo "  build-all     - Build for multiple platforms (amd64 only)"
 	@echo "  build-release - Build release versions for all platforms and architectures"
@@ -139,9 +142,80 @@ help:
 	@echo "  tidy          - Tidy go modules"
 	@echo "  run           - Run the application"
 	@echo "  version       - Show current version"
-	@echo "  help          - Show this help"
+	@echo ""
+	@echo "GUI 构建 (Wails):"
+	@echo "  gui           - Build GUI for current platform"
+	@echo "  gui-dev       - Run GUI in development mode with hot reload"
+	@echo "  gui-build     - Build GUI for production"
+	@echo "  gui-build-mac - Build GUI for macOS (universal binary)"
+	@echo "  gui-build-windows - Build GUI for Windows"
+	@echo "  gui-clean     - Clean GUI build artifacts"
 	@echo ""
 	@echo "Release workflow:"
 	@echo "  1. Tag your commit: git tag v1.0.0"
 	@echo "  2. Build release:   make build-release"
 	@echo "  3. Package files:   make package-release"
+
+# ========================
+# GUI 构建 (Wails)
+# ========================
+GUI_DIR=gui/gotun-gui
+GUI_VERSION=$(VERSION)
+
+# 检查 wails 是否安装
+check-wails:
+	@if ! command -v wails > /dev/null 2>&1; then \
+		echo "Error: wails is not installed. Please install it first:"; \
+		echo "  go install github.com/wailsapp/wails/v2/cmd/wails@latest"; \
+		exit 1; \
+	fi
+
+# GUI 开发模式
+gui-dev: check-wails
+	@echo "Starting GUI in development mode..."
+	@cd $(GUI_DIR) && wails dev
+
+# GUI 当前平台构建
+gui: check-wails
+	@echo "Building GUI for current platform..."
+	@cd $(GUI_DIR) && wails build -ldflags "-X main.Version=$(GUI_VERSION)"
+	@echo "GUI build complete!"
+
+# GUI 生产构建
+gui-build: gui
+
+# macOS 构建 (通用二进制)
+gui-build-mac: check-wails
+	@echo "Building GUI for macOS (universal)..."
+	@cd $(GUI_DIR) && wails build -platform darwin/universal -ldflags "-X main.Version=$(GUI_VERSION)"
+	@echo "macOS GUI build complete: $(GUI_DIR)/build/bin/"
+
+# Windows 构建
+gui-build-windows: check-wails
+	@echo "Building GUI for Windows..."
+	@cd $(GUI_DIR) && wails build -platform windows/amd64 -ldflags "-X main.Version=$(GUI_VERSION)"
+	@echo "Windows GUI build complete: $(GUI_DIR)/build/bin/"
+
+# Linux 构建
+gui-build-linux: check-wails
+	@echo "Building GUI for Linux..."
+	@cd $(GUI_DIR) && wails build -platform linux/amd64 -ldflags "-X main.Version=$(GUI_VERSION)"
+	@echo "Linux GUI build complete: $(GUI_DIR)/build/bin/"
+
+# 构建所有平台 GUI
+gui-build-all: gui-build-mac gui-build-windows gui-build-linux
+	@echo "All GUI builds complete!"
+
+# 清理 GUI 构建产物
+gui-clean:
+	@echo "Cleaning GUI build artifacts..."
+	@rm -rf $(GUI_DIR)/build/bin
+	@rm -rf $(GUI_DIR)/frontend/dist
+	@rm -rf $(GUI_DIR)/frontend/node_modules
+	@echo "GUI clean complete"
+
+# 安装 GUI 前端依赖
+gui-install:
+	@echo "Installing GUI frontend dependencies..."
+	@cd $(GUI_DIR)/frontend && npm install
+	@echo "GUI dependencies installed"
