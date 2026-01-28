@@ -38,10 +38,16 @@ build/
 dist/
 
 # GUI/Wails
-gui/gotun-gui/build/bin/
-gui/gotun-gui/frontend/dist/
-gui/gotun-gui/frontend/node_modules/
-gui/gotun-gui/wailsjs/
+gui/build/bin/
+gui/frontend/dist/
+gui/frontend/node_modules/
+gui/wailsjs/
+gui/frontend/wailsjs/
+gui/frontend/package.json.md5
+
+# Temporary directories
+*_temp/
+*_tmp/
 
 # macOS
 *.app

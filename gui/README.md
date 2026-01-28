@@ -41,7 +41,7 @@ wails doctor
 ### 安装依赖
 
 ```bash
-cd gui/gotun-gui
+cd gui
 
 # 安装 Go 依赖
 go mod tidy
@@ -53,7 +53,7 @@ cd frontend && npm install && cd ..
 ### 开发模式
 
 ```bash
-cd gui/gotun-gui
+cd gui
 wails dev
 ```
 
@@ -65,7 +65,7 @@ wails dev
 ### 构建
 
 ```bash
-cd gui/gotun-gui
+cd gui
 
 # macOS
 wails build
@@ -79,7 +79,7 @@ wails build -platform windows/amd64
 ## 项目结构
 
 ```
-gui/gotun-gui/
+gui/
 ├── app.go              # Wails 应用主逻辑，Go 后端 API
 ├── main.go             # 应用入口
 ├── wails.json          # Wails 配置文件
