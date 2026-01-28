@@ -148,8 +148,15 @@ help:
 	@echo "  gui-dev       - Run GUI in development mode with hot reload"
 	@echo "  gui-build     - Build GUI for production"
 	@echo "  gui-build-mac - Build GUI for macOS (universal binary)"
-	@echo "  gui-build-windows - Build GUI for Windows"
+	@echo "  gui-build-windows - Build GUI for Windows (cross-compile from macOS)"
+	@echo "  gui-build-linux - Build GUI for Linux (requires Linux host)"
+	@echo "  gui-build-all - Build GUI for all platforms"
+	@echo "  gui-generate-bindings - Generate Wails bindings"
 	@echo "  gui-clean     - Clean GUI build artifacts"
+	@echo ""
+	@echo "Notes:"
+	@echo "  - Linux GUI must be built on a Linux machine"
+	@echo "  - Windows/macOS can be cross-compiled from macOS"
 	@echo ""
 	@echo "Release workflow:"
 	@echo "  1. Tag your commit: git tag v1.0.0"
@@ -184,22 +191,27 @@ gui: check-wails
 # GUI 生产构建
 gui-build: gui
 
+# 生成绑定文件（跨平台构建前必须先执行）
+gui-generate-bindings: check-wails
+	@echo "Generating Wails bindings..."
+	@cd $(GUI_DIR) && wails generate module
+
 # macOS 构建 (通用二进制)
-gui-build-mac: check-wails
+gui-build-mac: check-wails gui-generate-bindings
 	@echo "Building GUI for macOS (universal)..."
-	@cd $(GUI_DIR) && wails build -platform darwin/universal -ldflags "-X main.Version=$(GUI_VERSION)"
+	@cd $(GUI_DIR) && wails build -platform darwin/universal -skipbindings -ldflags "-X main.Version=$(GUI_VERSION)"
 	@echo "macOS GUI build complete: $(GUI_DIR)/build/bin/"
 
 # Windows 构建
-gui-build-windows: check-wails
+gui-build-windows: check-wails gui-generate-bindings
 	@echo "Building GUI for Windows..."
-	@cd $(GUI_DIR) && wails build -platform windows/amd64 -ldflags "-X main.Version=$(GUI_VERSION)"
+	@cd $(GUI_DIR) && wails build -platform windows/amd64 -skipbindings -ldflags "-X main.Version=$(GUI_VERSION)"
 	@echo "Windows GUI build complete: $(GUI_DIR)/build/bin/"
 
 # Linux 构建
-gui-build-linux: check-wails
+gui-build-linux: check-wails gui-generate-bindings
 	@echo "Building GUI for Linux..."
-	@cd $(GUI_DIR) && wails build -platform linux/amd64 -ldflags "-X main.Version=$(GUI_VERSION)"
+	@cd $(GUI_DIR) && wails build -platform linux/amd64 -skipbindings -ldflags "-X main.Version=$(GUI_VERSION)"
 	@echo "Linux GUI build complete: $(GUI_DIR)/build/bin/"
 
 # 构建所有平台 GUI
