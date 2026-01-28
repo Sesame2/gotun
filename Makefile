@@ -159,7 +159,7 @@ help:
 # ========================
 # GUI 构建 (Wails)
 # ========================
-GUI_DIR=gui/gotun-gui
+GUI_DIR=gui
 GUI_VERSION=$(VERSION)
 
 # 检查 wails 是否安装
