@@ -1,0 +1,353 @@
+/* 全局禁用文字选择（客户端行为） */
+* {
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  cursor: default;
+}
+
+/* 允许输入框和日志区域选择文字 */
+input,
+textarea,
+.log-content,
+.log-content *,
+.selectable,
+.selectable * {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  -moz-user-select: text !important;
+  -ms-user-select: text !important;
+  cursor: text !important;
+}
+
+/* 按钮和可点击元素 */
+button,
+[role="button"],
+.clickable,
+a,
+.MuiButton-root,
+.MuiIconButton-root,
+.MuiSwitch-root,
+.MuiSelect-root,
+.MuiChip-root,
+.nav-item {
+  cursor: pointer;
+}
+
+/* Switch 组件内部不响应文字点击 */
+.MuiFormControlLabel-root {
+  pointer-events: none;
+  margin-right: 0 !important;
+  /* 修正右侧间距 */
+}
+
+.MuiFormControlLabel-root .MuiSwitch-root {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+/* 美化 Switch 开关样式 */
+.MuiSwitch-root {
+  width: 42px !important;
+  height: 26px !important;
+  padding: 0 !important;
+  cursor: pointer !important;
+}
+
+.MuiSwitch-switchBase {
+  padding: 0 !important;
+  margin: 2px !important;
+  transition-duration: 300ms !important;
+}
+
+.MuiSwitch-switchBase.Mui-checked {
+  transform: translateX(16px) !important;
+  color: #fff !important;
+}
+
+.MuiSwitch-thumb {
+  width: 22px !important;
+  height: 22px !important;
+  box-shadow: 0 2px 4px 0 rgb(0 35 11 / 20%) !important;
+}
+
+.MuiSwitch-track {
+  border-radius: 13px !important;
+  opacity: 1 !important;
+  background-color: rgba(0, 0, 0, 0.25) !important;
+  box-sizing: border-box !important;
+}
+
+.MuiSwitch-switchBase.Mui-checked+.MuiSwitch-track {
+  background-color: var(--primary-main) !important;
+  opacity: 1 !important;
+}
+
+/* 美化按钮样式 */
+.MuiButton-root {
+  border-radius: 20px !important;
+  padding: 8px 20px !important;
+  text-transform: none !important;
+  font-weight: 500 !important;
+}
+
+.MuiButton-outlined {
+  border-width: 1.5px !important;
+}
+
+.MuiIconButton-root {
+  border-radius: 12px !important;
+}
+
+/* 美化下拉框 */
+.MuiSelect-root {
+  border-radius: 12px !important;
+}
+
+.MuiOutlinedInput-root {
+  border-radius: 12px !important;
+}
+
+.layout {
+  width: 100%;
+  height: 100vh;
+  display: flex;
+  overflow: hidden;
+}
+
+/* macOS 标题栏拖动区域 */
+.titlebar {
+  --wails-draggable: drag;
+  -webkit-app-region: drag;
+  position: fixed;
+  top: 0;
+  left: 0;
+  /* 从左侧开始，覆盖整个顶部 */
+  right: 0;
+  height: 52px;
+  z-index: 1000;
+  /* 确保在最上层 */
+  pointer-events: none;
+  /* 让点击穿透过去 */
+}
+
+/* 侧边栏顶部也可拖动 */
+.sidebar-drag-area {
+  --wails-draggable: drag;
+  -webkit-app-region: drag;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 52px;
+}
+
+.layout-sidebar {
+  flex: 0 0 220px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  border-right: 1px solid var(--divider-color);
+}
+
+.layout-sidebar .logo {
+  --wails-draggable: drag;
+  -webkit-app-region: drag;
+  flex: 0 0 80px;
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  padding-top: 32px;
+  /* 为 macOS 红绿灯按钮留出空间 */
+  gap: 10px;
+  box-sizing: border-box;
+}
+
+.layout-sidebar .logo img {
+  width: 32px;
+  height: 32px;
+}
+
+.layout-sidebar .logo h1 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.layout-sidebar .nav-menu {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px;
+}
+
+.layout-sidebar .nav-item {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  margin-bottom: 4px;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-decoration: none;
+  color: inherit;
+}
+
+.layout-sidebar .nav-item:hover {
+  background: var(--sidebar-hover-bg-light);
+}
+
+.layout-sidebar .nav-item.active {
+  background: var(--sidebar-active-bg-light);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* 深色模式下的侧边栏样式覆盖 */
+.dark .layout-sidebar .nav-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+  /* 深色模式 hover */
+}
+
+.dark .layout-sidebar .nav-item.active {
+  background: var(--primary-main);
+  color: white;
+}
+
+.layout-sidebar .nav-item .icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  font-size: 20px;
+}
+
+.layout-sidebar .nav-item .icon svg {
+  font-size: 22px;
+}
+
+.layout-sidebar .nav-item .label {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 24px;
+}
+
+.layout-sidebar .status-card {
+  flex: 0 0 auto;
+  padding: 16px;
+  margin: 12px;
+  border-radius: 8px;
+  background: rgba(91, 92, 157, 0.1);
+}
+
+.layout-sidebar .status-card .status-title {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.layout-sidebar .status-card .status-value {
+  font-size: 14px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.layout-sidebar .status-card .status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.layout-sidebar .status-card .status-dot.running {
+  background: var(--success-color);
+}
+
+.layout-sidebar .status-card .status-dot.stopped {
+  background: var(--error-color);
+}
+
+.layout-sidebar .status-card .status-dot.starting {
+  background: var(--warning-color);
+}
+
+.layout-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.layout-content .header {
+  -webkit-app-region: drag;
+  flex: 0 0 80px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  padding-top: 32px;
+  /* 为 macOS 标题栏留出空间 */
+  border-bottom: 1px solid var(--divider-color);
+  box-sizing: border-box;
+}
+
+.layout-content .header h2 {
+  -webkit-app-region: no-drag;
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0;
+  line-height: 1;
+}
+
+.layout-content .header .actions {
+  -webkit-app-region: no-drag;
+  display: flex;
+  gap: 8px;
+}
+
+.layout-content .main {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+}
+
+/* Dark mode */
+.dark .layout-sidebar {
+  background: var(--background-dark);
+  border-color: #3a3a4a;
+}
+
+.dark .layout-content {
+  background: var(--background-dark);
+}
+
+.dark .layout-content .header {
+  border-color: #3a3a4a;
+}
+
+.dark .layout-sidebar .logo h1 {
+  color: #fff;
+}
+
+.dark .layout-sidebar .status-card {
+  background: #282a36;
+}
+
+.dark .layout-sidebar .status-card .status-value {
+  color: #fff;
+}
+
+.dark .layout-content .header h2 {
+  color: #fff;
+}
+
+/* Light mode defaults for things that were inline */
+.layout-sidebar .logo h1,
+.layout-content .header h2,
+.layout-sidebar .status-card .status-value {
+  color: var(--text-primary);
+}
