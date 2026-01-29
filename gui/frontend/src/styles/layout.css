@@ -21,6 +21,12 @@ textarea,
   cursor: text !important;
 }
 
+/* 禁用 macOS 自动首字母大写 */
+input {
+  text-transform: none !important;
+  -webkit-text-transform: none !important;
+}
+
 /* 按钮和可点击元素 */
 button,
 [role="button"],
@@ -182,6 +188,7 @@ a,
 }
 
 .layout-sidebar .nav-item {
+  --wails-draggable: no-drag;
   -webkit-app-region: no-drag;
   display: flex;
   align-items: center;

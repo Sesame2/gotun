@@ -2,7 +2,7 @@ package utils
 
 import (
 	"fmt"
-	"syscall"
+	"os"
 
 	"golang.org/x/term"
 )
@@ -12,7 +12,7 @@ func ReadPasswordFromTerminal(prompt string) (string, error) {
 	fmt.Print(prompt)
 
 	// 禁用回显
-	passwordByte, err := term.ReadPassword(int(syscall.Stdin))
+	passwordByte, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Println() // 换行
 	if err != nil {
 		return "", fmt.Errorf("读取密码失败： %v", err)
