@@ -283,6 +283,7 @@ a,
 }
 
 .layout-content .header {
+  --wails-draggable: drag;
   -webkit-app-region: drag;
   flex: 0 0 80px;
   display: flex;

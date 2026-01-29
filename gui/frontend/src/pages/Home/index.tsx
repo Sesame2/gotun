@@ -39,24 +39,40 @@ const HomePage: React.FC = () => {
   const isDark = theme.palette.mode === 'dark';
   const { status, refresh: refreshStatus } = useProxyStatus(1000);
   const { profiles, loading: profilesLoading } = useProfiles();
-  const [selectedProfileId, setSelectedProfileId] = useState<string>('');
+  const [selectedProfileId, setSelectedProfileId] = useState<string>(() => {
+    return localStorage.getItem('gotun_last_profile_id') || '';
+  });
   const [actionLoading, setActionLoading] = useState(false);
   const [testLoading, setTestLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
 
-  // 自动选择第一个配置
+  // 监听配置变化，如果当前选中的配置不存在了，或者没有选中配置，则默认选择第一个
   useEffect(() => {
-    if (profiles.length > 0 && !selectedProfileId) {
-      setSelectedProfileId(profiles[0].id);
+    if (profiles.length > 0) {
+      if (!selectedProfileId) {
+        setSelectedProfileId(profiles[0].id);
+      } else {
+        const exists = profiles.some(p => p.id === selectedProfileId);
+        if (!exists) {
+          setSelectedProfileId(profiles[0].id);
+        }
+      }
     }
   }, [profiles, selectedProfileId]);
+
+  // 保存选中状态
+  useEffect(() => {
+    if (selectedProfileId) {
+      localStorage.setItem('gotun_last_profile_id', selectedProfileId);
+    }
+  }, [selectedProfileId]);
 
   const handleStart = async () => {
     if (!selectedProfileId) {
       setMessage({ type: 'error', text: '请选择一个配置文件' });
       return;
     }
-    
+
     setActionLoading(true);
     setMessage(null);
     try {
@@ -117,8 +133,8 @@ const HomePage: React.FC = () => {
   return (
     <Box sx={{ maxWidth: 900, margin: '0 auto' }}>
       {message && (
-        <Alert 
-          severity={message.type} 
+        <Alert
+          severity={message.type}
           sx={{ mb: 2 }}
           onClose={() => setMessage(null)}
         >
@@ -132,10 +148,10 @@ const HomePage: React.FC = () => {
           <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
             控制面板
           </Typography>
-          
-          <Box sx={{ 
-            display: 'flex', 
-            gap: 2, 
+
+          <Box sx={{
+            display: 'flex',
+            gap: 2,
             alignItems: 'center',
             flexDirection: { xs: 'column', md: 'row' }
           }}>
@@ -195,11 +211,11 @@ const HomePage: React.FC = () => {
       </Card>
 
       {/* 状态卡片 */}
-      <Box sx={{ 
-        display: 'grid', 
+      <Box sx={{
+        display: 'grid',
         gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' },
-        gap: 2, 
-        mb: 3 
+        gap: 2,
+        mb: 3
       }}>
         <Card sx={cardStyle}>
           <CardContent>
@@ -276,8 +292,8 @@ const HomePage: React.FC = () => {
             <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
               配置详情: {selectedProfile.name}
             </Typography>
-            <Box sx={{ 
-              display: 'grid', 
+            <Box sx={{
+              display: 'grid',
               gridTemplateColumns: { xs: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' },
               gap: 2
             }}>
