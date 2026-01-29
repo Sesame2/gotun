@@ -13,21 +13,22 @@ import (
 
 // SSHProfile SSH配置文件
 type SSHProfile struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Host        string    `json:"host"`
-	Port        string    `json:"port"`
-	User        string    `json:"user"`
-	Password    string    `json:"password,omitempty"`
-	KeyFile     string    `json:"keyFile,omitempty"`
-	JumpHosts   []string  `json:"jumpHosts,omitempty"`
-	HTTPAddr    string    `json:"httpAddr"`
-	SocksAddr   string    `json:"socksAddr,omitempty"`
-	SystemProxy bool      `json:"systemProxy"`
-	RuleFile    string    `json:"ruleFile,omitempty"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
-	LastUsedAt  time.Time `json:"lastUsedAt,omitempty"`
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	Host          string            `json:"host"`
+	Port          string            `json:"port"`
+	User          string            `json:"user"`
+	Password      string            `json:"password,omitempty"`
+	KeyFile       string            `json:"keyFile,omitempty"`
+	JumpHosts     []string          `json:"jumpHosts,omitempty"`     // Legacy
+	JumpHostsList []config.JumpHost `json:"jumpHostsList,omitempty"` // GUI Structured
+	HTTPAddr      string            `json:"httpAddr"`
+	SocksAddr     string            `json:"socksAddr,omitempty"`
+	SystemProxy   bool              `json:"systemProxy"`
+	RuleFile      string            `json:"ruleFile,omitempty"`
+	CreatedAt     time.Time         `json:"createdAt"`
+	UpdatedAt     time.Time         `json:"updatedAt"`
+	LastUsedAt    time.Time         `json:"lastUsedAt,omitempty"`
 }
 
 // AppSettings 应用设置
@@ -271,6 +272,7 @@ func (s *ConfigService) ProfileToConfig(profile *SSHProfile) *config.Config {
 	cfg.SSHKeyFile = profile.KeyFile
 	cfg.SSHPort = profile.Port
 	cfg.JumpHosts = profile.JumpHosts
+	cfg.JumpHostsList = profile.JumpHostsList
 	cfg.ListenAddr = profile.HTTPAddr
 	cfg.SocksAddr = profile.SocksAddr
 	cfg.SystemProxy = profile.SystemProxy

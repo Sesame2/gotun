@@ -50,14 +50,17 @@ const initialFormData: ProfileFormData = {
   socksAddr: '',
   systemProxy: true,
   ruleFile: '',
+  enableJumpHost: false,
+  jumpHosts: [],
 };
 
 const ProfilesPage: React.FC = () => {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
   const { profiles, loading, addProfile, updateProfile, deleteProfile } = useProfiles();
-  
+
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [dialogError, setDialogError] = useState<string | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [editingProfile, setEditingProfile] = useState<SSHProfile | null>(null);
   const [deletingProfile, setDeletingProfile] = useState<SSHProfile | null>(null);
@@ -81,6 +84,8 @@ const ProfilesPage: React.FC = () => {
         socksAddr: profile.socksAddr || '',
         systemProxy: profile.systemProxy,
         ruleFile: profile.ruleFile || '',
+        enableJumpHost: (profile.jumpHostsList && profile.jumpHostsList.length > 0) || (profile.jumpHosts && profile.jumpHosts.length > 0) || false,
+        jumpHosts: profile.jumpHostsList || [],
       });
     } else {
       setEditingProfile(null);
@@ -91,6 +96,7 @@ const ProfilesPage: React.FC = () => {
 
   const handleCloseDialog = () => {
     setDialogOpen(false);
+    setDialogError(null);
     setEditingProfile(null);
     setFormData(initialFormData);
   };
@@ -100,6 +106,35 @@ const ProfilesPage: React.FC = () => {
   ) => {
     const value = event.target.type === 'checkbox' ? event.target.checked : event.target.value;
     setFormData(prev => ({ ...prev, [field]: value }));
+  };
+
+  const handleJumpHostChange = (index: number, field: keyof any, value: string) => {
+    const newJumpHosts = [...formData.jumpHosts];
+    newJumpHosts[index] = { ...newJumpHosts[index], [field]: value };
+    setFormData(prev => ({ ...prev, jumpHosts: newJumpHosts }));
+  };
+
+  const handleAddJumpHost = () => {
+    setFormData(prev => ({
+      ...prev,
+      jumpHosts: [...prev.jumpHosts, { host: '', port: '22', user: '', password: '' }]
+    }));
+  };
+
+  const handleRemoveJumpHost = (index: number) => {
+    const newJumpHosts = [...formData.jumpHosts];
+    newJumpHosts.splice(index, 1);
+    setFormData(prev => ({ ...prev, jumpHosts: newJumpHosts }));
+  };
+
+  const handleToggleJumpHost = (checked: boolean) => {
+    setFormData(prev => ({
+      ...prev,
+      enableJumpHost: checked,
+      jumpHosts: checked && prev.jumpHosts.length === 0
+        ? [{ host: '', port: '22', user: '', password: '' }]
+        : prev.jumpHosts
+    }));
   };
 
   const handleSelectFile = async (field: 'keyFile' | 'ruleFile') => {
@@ -120,22 +155,62 @@ const ProfilesPage: React.FC = () => {
       return;
     }
 
+    if (formData.enableJumpHost) {
+      for (let i = 0; i < formData.jumpHosts.length; i++) {
+        const jh = formData.jumpHosts[i];
+        if (!jh.host || !jh.user) {
+          setMessage({ type: 'error', text: `跳板机 ${i + 1} 缺少主机或用户名` });
+          return;
+        }
+      }
+    }
+
     setSaving(true);
     setMessage(null);
+    setDialogError(null);
     try {
+      // 构造正确的数据结构
+      // jumpHosts (legacy) 必须是字符串数组 (user@host:port 格式)
+      // jumpHostsList (GUI) 是对象数组
+      const jumpHostsLegacy: string[] = formData.enableJumpHost
+        ? formData.jumpHosts.map(jh => {
+          let str = jh.host;
+          if (jh.port && jh.port !== '22') str += `:${jh.port}`;
+          if (jh.user) str = `${jh.user}@${str}`;
+          return str;
+        })
+        : [];
+      const jumpHostsList = formData.enableJumpHost ? formData.jumpHosts : [];
+
+      // 构造完整的 profile 对象，显式覆盖 jumpHosts
+      const profilePayload = {
+        name: formData.name,
+        host: formData.host,
+        port: formData.port,
+        user: formData.user,
+        password: formData.password,
+        keyFile: formData.keyFile,
+        httpAddr: formData.httpAddr,
+        socksAddr: formData.socksAddr,
+        systemProxy: formData.systemProxy,
+        ruleFile: formData.ruleFile,
+        jumpHosts: jumpHostsLegacy,  // 必须是 string[]
+        jumpHostsList: jumpHostsList, // 对象数组
+      };
+
       if (editingProfile) {
         await updateProfile({
           ...editingProfile,
-          ...formData,
-        } as SSHProfile);
+          ...profilePayload,
+        } as unknown as SSHProfile);
         setMessage({ type: 'success', text: '配置已更新' });
       } else {
-        await addProfile(formData as any);
+        await addProfile(profilePayload as any);
         setMessage({ type: 'success', text: '配置已添加' });
       }
       handleCloseDialog();
     } catch (err) {
-      setMessage({ type: 'error', text: err instanceof Error ? err.message : '保存失败' });
+      setDialogError(err instanceof Error ? err.message : '保存失败');
     } finally {
       setSaving(false);
     }
@@ -289,6 +364,11 @@ const ProfilesPage: React.FC = () => {
           {editingProfile ? '编辑配置' : '添加配置'}
         </DialogTitle>
         <DialogContent>
+          {dialogError && (
+            <Alert severity="error" sx={{ mb: 2, mt: 1 }} onClose={() => setDialogError(null)}>
+              {dialogError}
+            </Alert>
+          )}
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 2 }}>
             <TextField
               label="配置名称"
@@ -297,8 +377,9 @@ const ProfilesPage: React.FC = () => {
               value={formData.name}
               onChange={handleChange('name')}
               placeholder="例如: 我的服务器"
+              inputProps={{ autoCapitalize: 'off', autoCorrect: 'off' }}
             />
-            
+
             <Box sx={{ display: 'flex', gap: 2 }}>
               <TextField
                 label="SSH主机"
@@ -308,6 +389,7 @@ const ProfilesPage: React.FC = () => {
                 onChange={handleChange('host')}
                 placeholder="例如: example.com"
                 sx={{ flex: 2 }}
+                inputProps={{ autoCapitalize: 'off', autoCorrect: 'off' }}
               />
               <TextField
                 label="端口"
@@ -315,9 +397,10 @@ const ProfilesPage: React.FC = () => {
                 onChange={handleChange('port')}
                 placeholder="22"
                 sx={{ flex: 1 }}
+                inputProps={{ autoCapitalize: 'off', autoCorrect: 'off' }}
               />
             </Box>
-            
+
             <TextField
               label="用户名"
               fullWidth
@@ -325,8 +408,9 @@ const ProfilesPage: React.FC = () => {
               value={formData.user}
               onChange={handleChange('user')}
               placeholder="例如: root"
+              inputProps={{ autoCapitalize: 'off', autoCorrect: 'off' }}
             />
-            
+
             <TextField
               label="密码"
               fullWidth
@@ -342,7 +426,7 @@ const ProfilesPage: React.FC = () => {
                 ),
               }}
             />
-            
+
             <TextField
               label="私钥文件路径"
               fullWidth
@@ -357,7 +441,7 @@ const ProfilesPage: React.FC = () => {
                 ),
               }}
             />
-            
+
             <Box sx={{ display: 'flex', gap: 2 }}>
               <TextField
                 label="HTTP代理地址"
@@ -374,7 +458,17 @@ const ProfilesPage: React.FC = () => {
                 placeholder="留空则不启用"
               />
             </Box>
-            
+
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={formData.systemProxy}
+                  onChange={handleChange('systemProxy')}
+                />
+              }
+              label="自动设置系统代理"
+            />
+
             <TextField
               label="规则文件路径"
               fullWidth
@@ -389,16 +483,83 @@ const ProfilesPage: React.FC = () => {
                 ),
               }}
             />
-            
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={formData.systemProxy}
-                  onChange={handleChange('systemProxy')}
+
+            <Box sx={{ my: 1 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={formData.enableJumpHost}
+                      onChange={(e) => handleToggleJumpHost(e.target.checked)}
+                    />
+                  }
+                  label="启用跳板机"
                 />
-              }
-              label="自动设置系统代理"
-            />
+              </Box>
+
+              {formData.enableJumpHost && (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pl: 2, borderLeft: '2px solid', borderColor: 'divider' }}>
+                  {formData.jumpHosts.map((jh, index) => (
+                    <Box key={index} sx={{ mt: 1 }}>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                        <Typography variant="subtitle2" color="primary">跳板机 {index + 1}</Typography>
+                        <IconButton size="small" color="error" onClick={() => handleRemoveJumpHost(index)}>
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </Box>
+                      <Box sx={{ display: 'flex', gap: 2, mb: 1 }}>
+                        <TextField
+                          label="主机地址"
+                          size="small"
+                          fullWidth
+                          value={jh.host}
+                          onChange={(e) => handleJumpHostChange(index, 'host', e.target.value)}
+                          sx={{ flex: 2 }}
+                          inputProps={{ autoCapitalize: 'off', autoCorrect: 'off' }}
+                        />
+                        <TextField
+                          label="端口"
+                          size="small"
+                          value={jh.port}
+                          onChange={(e) => handleJumpHostChange(index, 'port', e.target.value)}
+                          sx={{ flex: 1 }}
+                          inputProps={{ autoCapitalize: 'off', autoCorrect: 'off' }}
+                        />
+                      </Box>
+                      <Box sx={{ display: 'flex', gap: 2 }}>
+                        <TextField
+                          label="用户名"
+                          size="small"
+                          fullWidth
+                          value={jh.user}
+                          onChange={(e) => handleJumpHostChange(index, 'user', e.target.value)}
+                          inputProps={{ autoCapitalize: 'off', autoCorrect: 'off' }}
+                        />
+                        <TextField
+                          label="密码"
+                          size="small"
+                          fullWidth
+                          type="password"
+                          value={jh.password || ''}
+                          onChange={(e) => handleJumpHostChange(index, 'password', e.target.value)}
+                          placeholder="如果不填则使用私钥"
+                          inputProps={{ autoCapitalize: 'off', autoCorrect: 'off' }}
+                        />
+                      </Box>
+                    </Box>
+                  ))}
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    startIcon={<AddIcon />}
+                    onClick={handleAddJumpHost}
+                    sx={{ alignSelf: 'flex-start', mt: 1 }}
+                  >
+                    增加跳板机
+                  </Button>
+                </Box>
+              )}
+            </Box>
           </Box>
         </DialogContent>
         <DialogActions>

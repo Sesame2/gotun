@@ -21,6 +21,15 @@ export interface ProfileFormData {
   socksAddr: string;
   systemProxy: boolean;
   ruleFile: string;
+  enableJumpHost: boolean;
+  jumpHosts: JumpHost[];
+}
+
+export interface JumpHost {
+  host: string;
+  port: string;
+  user: string;
+  password?: string;
 }
 
 // 主题模式

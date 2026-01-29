@@ -38,12 +38,15 @@ build/
 dist/
 
 # GUI/Wails
-gui/build/bin/
+gui/build/
 gui/frontend/dist/
 gui/frontend/node_modules/
 gui/wailsjs/
 gui/frontend/wailsjs/
 gui/frontend/package.json.md5
+gui/gui
+gui/gotun
+gui/gotun.exe
 
 # Temporary directories
 *_temp/

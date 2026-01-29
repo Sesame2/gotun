@@ -146,6 +146,18 @@ func (s *ProxyService) Start() error {
 		return err
 	}
 
+	// 修正: 如果提供了密码，则禁用交互式认证，防止在无终端环境下尝试读取stdin导致失败
+	if s.cfg.SSHPassword != "" {
+		s.logger.Debug("检测到已配置密码，自动禁用交互式认证")
+		s.cfg.InteractiveAuth = false
+	} else if len(s.cfg.SSHKeyFile) == 0 && s.cfg.InteractiveAuth {
+		// 即使没提供密码，如果是GUI环境且没有终端，交互式认证也会失败。
+		// 但为了保险起见，我们只在有明确替代方案(密码)时禁用它，
+		// 或者留给底层去尝试(虽然会失败)。
+		// 更好的做法可能是: 对于GUI Service，默认就是非交互式的。
+		// 这里暂且只处理"有密码但因为Interactive=true而失败"的情况。
+	}
+
 	s.logger.Infof("GoTun GUI 代理服务启动中...")
 
 	// 1. 初始化 Router
@@ -293,6 +305,11 @@ func (s *ProxyService) Restart() error {
 // TestConnection 测试SSH连接
 func (s *ProxyService) TestConnection(cfg *config.Config) error {
 	testLogger := logger.NewLogger(true)
+
+	// 修正: GUI环境下测试连接时，如果有密码，应禁用交互式认证
+	if cfg.SSHPassword != "" {
+		cfg.InteractiveAuth = false
+	}
 
 	// 尝试建立SSH连接
 	client, err := proxy.NewSSHClient(cfg, testLogger)

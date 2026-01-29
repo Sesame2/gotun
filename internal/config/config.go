@@ -14,6 +14,14 @@ type SubnetAlias struct {
 	Dst *net.IPNet
 }
 
+// JumpHost 定义跳板机配置
+type JumpHost struct {
+	Host     string `json:"host"`
+	Port     string `json:"port"`
+	User     string `json:"user"`
+	Password string `json:"password,omitempty"`
+}
+
 // Config 存储应用配置
 type Config struct {
 	ListenAddr      string
@@ -29,7 +37,8 @@ type Config struct {
 	TunRoute        []string      // 需要路由到 TUN 的网段
 	TunGlobal       bool          // 是否开启全局模式
 	SubnetAliases   []SubnetAlias // 网段/IP映射规则 (NAT)
-	JumpHosts       []string      // 跳板机列表
+	JumpHosts       []string      // 跳板机列表 (CLI/Legacy)
+	JumpHostsList   []JumpHost    // 跳板机列表 (GUI/Structured)
 	Timeout         time.Duration
 	Verbose         bool
 	LogFile         string
@@ -45,6 +54,7 @@ func NewConfig() *Config {
 		SSHServer:       "",
 		SSHPort:         "22", // 默认SSH端口
 		JumpHosts:       []string{},
+		JumpHostsList:   []JumpHost{},
 		Timeout:         10 * time.Second,
 		Verbose:         false,
 		InteractiveAuth: true,
@@ -108,7 +118,7 @@ func (c *Config) Validate() error {
 		return errors.New("必须提供SSH密码、私钥文件或使用交互式认证")
 	}
 
-	// 验证跳板机格式
+	// 验证跳板机格式 (CLI/Legacy)
 	for _, jumpHost := range c.JumpHosts {
 		if jumpHost == "" {
 			continue
@@ -116,6 +126,19 @@ func (c *Config) Validate() error {
 		_, _, _, err := parseJumpHost(jumpHost)
 		if err != nil {
 			return fmt.Errorf("跳板机格式错误: %v", err)
+		}
+	}
+
+	// 验证结构化跳板机配置 (GUI)
+	for i, jh := range c.JumpHostsList {
+		if jh.Host == "" {
+			return fmt.Errorf("第 %d 个跳板机配置缺少主机地址", i+1)
+		}
+		if jh.User == "" {
+			return fmt.Errorf("第 %d 个跳板机配置缺少用户名", i+1)
+		}
+		if jh.Port == "" {
+			c.JumpHostsList[i].Port = "22"
 		}
 	}
 
