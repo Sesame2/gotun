@@ -149,3 +149,26 @@ func (c *Config) Validate() error {
 func (c *Config) GetJumpHostInfo(jumpHost string) (user, host, port string, err error) {
 	return parseJumpHost(jumpHost)
 }
+
+// ParseSubnetAlias 解析子网别名规则 (格式: SrcCIDR:DstCIDR)
+func ParseSubnetAlias(alias string) (SubnetAlias, error) {
+	parts := strings.Split(alias, ":")
+	if len(parts) != 2 {
+		return SubnetAlias{}, fmt.Errorf("无效的NAT映射格式: %s (应为 SrcCIDR:DstCIDR)", alias)
+	}
+
+	_, srcNet, err := net.ParseCIDR(parts[0])
+	if err != nil {
+		return SubnetAlias{}, fmt.Errorf("无效的源CIDR: %s (%v)", parts[0], err)
+	}
+
+	_, dstNet, err := net.ParseCIDR(parts[1])
+	if err != nil {
+		return SubnetAlias{}, fmt.Errorf("无效的目标CIDR: %s (%v)", parts[1], err)
+	}
+
+	return SubnetAlias{
+		Src: srcNet,
+		Dst: dstNet,
+	}, nil
+}

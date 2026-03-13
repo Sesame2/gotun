@@ -5,9 +5,14 @@ import { service } from '../../wailsjs/go/models';
 export type SSHProfile = service.SSHProfile;
 export type ProxyStats = service.ProxyStats;
 export type AppSettings = service.AppSettings;
+export type TunStats = service.TunStats;
+export type TunNATRule = service.TunNATRule;
 
 // 代理状态
 export type ProxyStatusType = 'stopped' | 'starting' | 'running' | 'stopping' | 'error';
+
+// TUN状态
+export type TunStatusType = 'stopped' | 'starting' | 'running' | 'stopping' | 'error';
 
 // 创建配置文件表单数据
 export interface ProfileFormData {
@@ -23,6 +28,12 @@ export interface ProfileFormData {
   ruleFile: string;
   enableJumpHost: boolean;
   jumpHosts: JumpHost[];
+  // TUN 模式配置
+  tunMode: boolean;
+  tunGlobal: boolean;
+  tunCIDR: string;
+  tunRoutes: string[];
+  tunNAT: TunNATRuleFormData[];
 }
 
 export interface JumpHost {
@@ -30,6 +41,12 @@ export interface JumpHost {
   port: string;
   user: string;
   password?: string;
+}
+
+// TUN NAT规则表单数据
+export interface TunNATRuleFormData {
+  srcCIDR: string;
+  dstCIDR: string;
 }
 
 // 主题模式

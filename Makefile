@@ -151,6 +151,7 @@ help:
 	@echo "  gui-build-windows - Build GUI for Windows (cross-compile from macOS)"
 	@echo "  gui-build-linux - Build GUI for Linux (requires Linux host)"
 	@echo "  gui-build-all - Build GUI for all platforms"
+	@echo "  gui-package-dmg - Create macOS DMG installer package"
 	@echo "  gui-generate-bindings - Generate Wails bindings"
 	@echo "  gui-clean     - Clean GUI build artifacts"
 	@echo ""
@@ -231,3 +232,26 @@ gui-install:
 	@echo "Installing GUI frontend dependencies..."
 	@cd $(GUI_DIR)/frontend && npm install
 	@echo "GUI dependencies installed"
+
+# 创建 macOS DMG 安装包
+gui-package-dmg: gui-build-mac
+	@echo "Creating DMG package for macOS..."
+	@if ! command -v create-dmg > /dev/null 2>&1; then \
+		echo "Installing create-dmg..."; \
+		brew install create-dmg; \
+	fi
+	@mkdir -p $(GUI_DIR)/build/dmg
+	@rm -rf $(GUI_DIR)/build/dmg/GoTun-$(GUI_VERSION).dmg
+	@create-dmg \
+		--volname "GoTun $(GUI_VERSION)" \
+		--volicon "$(GUI_DIR)/build/appicon.png" \
+		--window-pos 200 120 \
+		--window-size 600 400 \
+		--icon-size 100 \
+		--icon "GoTun.app" 175 190 \
+		--hide-extension "GoTun.app" \
+		--app-drop-link 425 190 \
+		--no-internet-enable \
+		"$(GUI_DIR)/build/dmg/GoTun-$(GUI_VERSION).dmg" \
+		"$(GUI_DIR)/build/bin/"
+	@echo "DMG created: $(GUI_DIR)/build/dmg/GoTun-$(GUI_VERSION).dmg"

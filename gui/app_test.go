@@ -13,6 +13,9 @@ func TestNewApp(t *testing.T) {
 	if app.proxyService == nil {
 		t.Error("proxyService should not be nil")
 	}
+	if app.tunService == nil {
+		t.Error("tunService should not be nil")
+	}
 	if app.logs == nil {
 		t.Error("logs should not be nil")
 	}
@@ -152,5 +155,81 @@ func TestGetVersion(t *testing.T) {
 	version := app.GetVersion()
 	if version == "" {
 		t.Error("Version should not be empty")
+	}
+}
+
+// ==================== TUN服务相关测试 ====================
+
+func TestGetTunStatus(t *testing.T) {
+	app := NewApp()
+
+	status := app.GetTunStatus()
+	if status.Status != "stopped" {
+		t.Errorf("Expected initial TUN status to be 'stopped', got '%s'", status.Status)
+	}
+}
+
+func TestRequiresTunElevation(t *testing.T) {
+	app := NewApp()
+
+	// 此测试会根据运行环境返回不同结果
+	// 主要确保方法可以正常调用
+	_ = app.RequiresTunElevation()
+}
+
+func TestIsRunningAsAdmin(t *testing.T) {
+	app := NewApp()
+
+	// 此测试会根据运行环境返回不同结果
+	// 主要确保方法可以正常调用
+	_ = app.IsRunningAsAdmin()
+}
+
+func TestStartTunProxyWithoutConfig(t *testing.T) {
+	app := NewApp()
+	// 未初始化 configService，应该返回错误
+
+	err := app.StartTunProxy("test-profile")
+	if err == nil {
+		t.Error("StartTunProxy should fail when configService is not initialized")
+	}
+}
+
+func TestStopTunProxy(t *testing.T) {
+	app := NewApp()
+
+	// 停止未运行的服务应该不会报错
+	err := app.StopTunProxy()
+	if err != nil {
+		t.Errorf("StopTunProxy should not error when service is not running: %v", err)
+	}
+}
+
+// TestRequestElevationRestart 测试提权重启功能
+// 注意: 此测试不会实际执行提权，因为它需要用户交互
+func TestRequestElevationRestart(t *testing.T) {
+	app := NewApp()
+
+	// 测试: 验证函数可以被调用并返回（不会panic）
+	// 实际的提权测试需要在手动测试中完成
+	// 这里我们只验证 app 的初始状态
+
+	// 验证 tunService 存在
+	if app.tunService == nil {
+		t.Fatal("tunService should not be nil")
+	}
+
+	// 验证 RequiresTunElevation 方法可用
+	needsElevation := app.RequiresTunElevation()
+	t.Logf("RequiresTunElevation: %v", needsElevation)
+
+	// 验证 IsRunningAsAdmin 方法可用
+	isAdmin := app.IsRunningAsAdmin()
+	t.Logf("IsRunningAsAdmin: %v", isAdmin)
+
+	// 两者应该是互补的（在大多数情况下）
+	// 如果需要提权，则不是管理员；如果是管理员，则不需要提权
+	if needsElevation == isAdmin {
+		t.Logf("注意: needsElevation (%v) 和 isAdmin (%v) 应该互补", needsElevation, isAdmin)
 	}
 }

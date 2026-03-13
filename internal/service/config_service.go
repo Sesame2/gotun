@@ -26,9 +26,21 @@ type SSHProfile struct {
 	SocksAddr     string            `json:"socksAddr,omitempty"`
 	SystemProxy   bool              `json:"systemProxy"`
 	RuleFile      string            `json:"ruleFile,omitempty"`
-	CreatedAt     time.Time         `json:"createdAt"`
-	UpdatedAt     time.Time         `json:"updatedAt"`
-	LastUsedAt    time.Time         `json:"lastUsedAt,omitempty"`
+	// TUN 模式配置
+	TunMode    bool         `json:"tunMode"`             // 是否启用TUN模式
+	TunGlobal  bool         `json:"tunGlobal"`           // 全局模式
+	TunCIDR    string       `json:"tunCIDR,omitempty"`   // TUN设备CIDR (默认 10.0.0.1/24)
+	TunRoutes  []string     `json:"tunRoutes,omitempty"` // 静态路由列表
+	TunNAT     []TunNATRule `json:"tunNAT,omitempty"`    // NAT映射规则
+	CreatedAt  time.Time    `json:"createdAt"`
+	UpdatedAt  time.Time    `json:"updatedAt"`
+	LastUsedAt time.Time    `json:"lastUsedAt,omitempty"`
+}
+
+// TunNATRule TUN NAT映射规则
+type TunNATRule struct {
+	SrcCIDR string `json:"srcCIDR"` // 本地CIDR (例如 10.0.0.0/24)
+	DstCIDR string `json:"dstCIDR"` // 远程CIDR (例如 192.168.0.0/24)
 }
 
 // AppSettings 应用设置
@@ -277,6 +289,23 @@ func (s *ConfigService) ProfileToConfig(profile *SSHProfile) *config.Config {
 	cfg.SocksAddr = profile.SocksAddr
 	cfg.SystemProxy = profile.SystemProxy
 	cfg.RuleFile = profile.RuleFile
+
+	// TUN 模式配置
+	cfg.TunMode = profile.TunMode
+	cfg.TunGlobal = profile.TunGlobal
+	if profile.TunCIDR != "" {
+		cfg.TunCIDR = profile.TunCIDR
+	}
+	cfg.TunRoute = profile.TunRoutes
+
+	// 转换 NAT 规则
+	for _, nat := range profile.TunNAT {
+		alias, err := config.ParseSubnetAlias(nat.SrcCIDR + ":" + nat.DstCIDR)
+		if err == nil {
+			cfg.SubnetAliases = append(cfg.SubnetAliases, alias)
+		}
+	}
+
 	return cfg
 }
 

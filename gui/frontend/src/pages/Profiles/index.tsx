@@ -24,6 +24,11 @@ import {
   Alert,
   CircularProgress,
   Tooltip,
+  Divider,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
 } from '@mui/material';
 import {
   Add as AddIcon,
@@ -33,10 +38,11 @@ import {
   Visibility as ViewIcon,
   VisibilityOff as HideIcon,
   FolderOpen as FolderIcon,
+  Router as TunIcon,
 } from '@mui/icons-material';
 import { useTheme } from '@mui/material/styles';
 import { useProfiles } from '../../hooks/useConfig';
-import { SSHProfile, ProfileFormData } from '../../types';
+import { SSHProfile, ProfileFormData, TunNATRuleFormData } from '../../types';
 import { TestConnection, OpenFileDialog } from '../../../wailsjs/go/main/App';
 
 const initialFormData: ProfileFormData = {
@@ -52,6 +58,12 @@ const initialFormData: ProfileFormData = {
   ruleFile: '',
   enableJumpHost: false,
   jumpHosts: [],
+  // TUN 模式配置
+  tunMode: false,
+  tunGlobal: false,
+  tunCIDR: '10.0.0.1/24',
+  tunRoutes: [],
+  tunNAT: [],
 };
 
 const ProfilesPage: React.FC = () => {
@@ -86,6 +98,15 @@ const ProfilesPage: React.FC = () => {
         ruleFile: profile.ruleFile || '',
         enableJumpHost: (profile.jumpHostsList && profile.jumpHostsList.length > 0) || (profile.jumpHosts && profile.jumpHosts.length > 0) || false,
         jumpHosts: profile.jumpHostsList || [],
+        // TUN 模式配置
+        tunMode: profile.tunMode || false,
+        tunGlobal: profile.tunGlobal || false,
+        tunCIDR: profile.tunCIDR || '10.0.0.1/24',
+        tunRoutes: profile.tunRoutes || [],
+        tunNAT: (profile.tunNAT || []).map(nat => ({
+          srcCIDR: nat.srcCIDR,
+          dstCIDR: nat.dstCIDR,
+        })),
       });
     } else {
       setEditingProfile(null);
@@ -137,6 +158,52 @@ const ProfilesPage: React.FC = () => {
     }));
   };
 
+  // TUN 模式相关处理函数
+  const handleToggleTunMode = (checked: boolean) => {
+    setFormData(prev => ({
+      ...prev,
+      tunMode: checked,
+    }));
+  };
+
+  const handleTunRouteChange = (index: number, value: string) => {
+    const newRoutes = [...formData.tunRoutes];
+    newRoutes[index] = value;
+    setFormData(prev => ({ ...prev, tunRoutes: newRoutes }));
+  };
+
+  const handleAddTunRoute = () => {
+    setFormData(prev => ({
+      ...prev,
+      tunRoutes: [...prev.tunRoutes, '']
+    }));
+  };
+
+  const handleRemoveTunRoute = (index: number) => {
+    const newRoutes = [...formData.tunRoutes];
+    newRoutes.splice(index, 1);
+    setFormData(prev => ({ ...prev, tunRoutes: newRoutes }));
+  };
+
+  const handleTunNATChange = (index: number, field: keyof TunNATRuleFormData, value: string) => {
+    const newNAT = [...formData.tunNAT];
+    newNAT[index] = { ...newNAT[index], [field]: value };
+    setFormData(prev => ({ ...prev, tunNAT: newNAT }));
+  };
+
+  const handleAddTunNAT = () => {
+    setFormData(prev => ({
+      ...prev,
+      tunNAT: [...prev.tunNAT, { srcCIDR: '', dstCIDR: '' }]
+    }));
+  };
+
+  const handleRemoveTunNAT = (index: number) => {
+    const newNAT = [...formData.tunNAT];
+    newNAT.splice(index, 1);
+    setFormData(prev => ({ ...prev, tunNAT: newNAT }));
+  };
+
   const handleSelectFile = async (field: 'keyFile' | 'ruleFile') => {
     try {
       const title = field === 'keyFile' ? '选择SSH私钥文件' : '选择规则文件';
@@ -182,6 +249,11 @@ const ProfilesPage: React.FC = () => {
         : [];
       const jumpHostsList = formData.enableJumpHost ? formData.jumpHosts : [];
 
+      // 过滤空的 TUN 路由
+      const tunRoutes = formData.tunRoutes.filter(r => r.trim() !== '');
+      // 过滤空的 TUN NAT 规则
+      const tunNAT = formData.tunNAT.filter(nat => nat.srcCIDR.trim() !== '' && nat.dstCIDR.trim() !== '');
+
       // 构造完整的 profile 对象，显式覆盖 jumpHosts
       const profilePayload = {
         name: formData.name,
@@ -196,6 +268,12 @@ const ProfilesPage: React.FC = () => {
         ruleFile: formData.ruleFile,
         jumpHosts: jumpHostsLegacy,  // 必须是 string[]
         jumpHostsList: jumpHostsList, // 对象数组
+        // TUN 模式配置
+        tunMode: formData.tunMode,
+        tunGlobal: formData.tunGlobal,
+        tunCIDR: formData.tunCIDR,
+        tunRoutes: tunRoutes,
+        tunNAT: tunNAT,
       };
 
       if (editingProfile) {
@@ -290,7 +368,7 @@ const ProfilesPage: React.FC = () => {
                     <TableCell>服务器</TableCell>
                     <TableCell>用户</TableCell>
                     <TableCell>HTTP代理</TableCell>
-                    <TableCell>系统代理</TableCell>
+                    <TableCell>模式</TableCell>
                     <TableCell align="right">操作</TableCell>
                   </TableRow>
                 </TableHead>
@@ -308,11 +386,30 @@ const ProfilesPage: React.FC = () => {
                       <TableCell>{profile.user}</TableCell>
                       <TableCell>{profile.httpAddr}</TableCell>
                       <TableCell>
-                        <Chip
-                          label={profile.systemProxy ? '启用' : '禁用'}
-                          size="small"
-                          color={profile.systemProxy ? 'success' : 'default'}
-                        />
+                        <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                          {profile.tunMode ? (
+                            <Chip
+                              icon={<TunIcon sx={{ fontSize: '1rem !important' }} />}
+                              label={profile.tunGlobal ? 'TUN全局' : 'TUN路由'}
+                              size="small"
+                              color="primary"
+                              variant="outlined"
+                            />
+                          ) : (
+                            <Chip
+                              label="HTTP代理"
+                              size="small"
+                              color="default"
+                            />
+                          )}
+                          {profile.systemProxy && (
+                            <Chip
+                              label="系统代理"
+                              size="small"
+                              color="success"
+                            />
+                          )}
+                        </Box>
                       </TableCell>
                       <TableCell align="right">
                         <Tooltip title="测试连接">
@@ -557,6 +654,129 @@ const ProfilesPage: React.FC = () => {
                   >
                     增加跳板机
                   </Button>
+                </Box>
+              )}
+            </Box>
+
+            {/* TUN 模式配置 */}
+            <Divider sx={{ my: 2 }} />
+            <Box sx={{ my: 1 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={formData.tunMode}
+                      onChange={(e) => handleToggleTunMode(e.target.checked)}
+                    />
+                  }
+                  label={
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <TunIcon fontSize="small" />
+                      <span>启用 TUN 模式 (VPN)</span>
+                    </Box>
+                  }
+                />
+              </Box>
+
+              {formData.tunMode && (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pl: 2, borderLeft: '2px solid', borderColor: 'primary.main' }}>
+                  <Alert severity="info" sx={{ mb: 1 }}>
+                    TUN 模式需要管理员权限，启动时会自动请求提权
+                  </Alert>
+
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={formData.tunGlobal}
+                        onChange={handleChange('tunGlobal')}
+                      />
+                    }
+                    label="全局模式 (代理所有流量)"
+                  />
+
+                  <TextField
+                    label="TUN 设备 CIDR"
+                    fullWidth
+                    size="small"
+                    value={formData.tunCIDR}
+                    onChange={handleChange('tunCIDR')}
+                    placeholder="10.0.0.1/24"
+                    helperText="TUN 虚拟网卡的 IP 地址"
+                    inputProps={{ autoCapitalize: 'off', autoCorrect: 'off' }}
+                  />
+
+                  {/* 静态路由配置 */}
+                  {!formData.tunGlobal && (
+                    <Box>
+                      <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                        静态路由 (仅路由指定网段)
+                      </Typography>
+                      {formData.tunRoutes.map((route, index) => (
+                        <Box key={index} sx={{ display: 'flex', gap: 1, mb: 1 }}>
+                          <TextField
+                            size="small"
+                            fullWidth
+                            value={route}
+                            onChange={(e) => handleTunRouteChange(index, e.target.value)}
+                            placeholder="例如: 192.168.1.0/24"
+                            inputProps={{ autoCapitalize: 'off', autoCorrect: 'off' }}
+                          />
+                          <IconButton size="small" color="error" onClick={() => handleRemoveTunRoute(index)}>
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
+                        </Box>
+                      ))}
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        startIcon={<AddIcon />}
+                        onClick={handleAddTunRoute}
+                        sx={{ mt: 1 }}
+                      >
+                        添加路由
+                      </Button>
+                    </Box>
+                  )}
+
+                  {/* NAT 映射配置 */}
+                  <Box>
+                    <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                      NAT 映射 (解决网段冲突)
+                    </Typography>
+                    {formData.tunNAT.map((nat, index) => (
+                      <Box key={index} sx={{ display: 'flex', gap: 1, mb: 1, alignItems: 'center' }}>
+                        <TextField
+                          size="small"
+                          sx={{ flex: 1 }}
+                          value={nat.srcCIDR}
+                          onChange={(e) => handleTunNATChange(index, 'srcCIDR', e.target.value)}
+                          placeholder="本地 CIDR (如 10.0.0.0/24)"
+                          inputProps={{ autoCapitalize: 'off', autoCorrect: 'off' }}
+                        />
+                        <Typography variant="body2" sx={{ mx: 1 }}>→</Typography>
+                        <TextField
+                          size="small"
+                          sx={{ flex: 1 }}
+                          value={nat.dstCIDR}
+                          onChange={(e) => handleTunNATChange(index, 'dstCIDR', e.target.value)}
+                          placeholder="远程 CIDR (如 192.168.0.0/24)"
+                          inputProps={{ autoCapitalize: 'off', autoCorrect: 'off' }}
+                        />
+                        <IconButton size="small" color="error" onClick={() => handleRemoveTunNAT(index)}>
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </Box>
+                    ))}
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      startIcon={<AddIcon />}
+                      onClick={handleAddTunNAT}
+                      sx={{ mt: 1 }}
+                    >
+                      添加 NAT 规则
+                    </Button>
+                  </Box>
                 </Box>
               )}
             </Box>
