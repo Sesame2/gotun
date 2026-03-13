@@ -1,8 +1,10 @@
 BINARY_NAME=gotun
+GUI_BINARY_NAME=gotun-gui
 VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 BUILD_DIR=./build
 LDFLAGS=-ldflags "-X main.Version=$(VERSION) -s -w"
 MAIN_PACKAGE=./cmd/gotun
+GUI_PACKAGE=./cmd/gotun-gui
 
 # Go命令
 GOCMD=go
@@ -29,7 +31,8 @@ build:
 	@echo "Building $(BINARY_NAME)..."
 	@mkdir -p $(BUILD_DIR)
 	@$(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) $(MAIN_PACKAGE)
-	@echo "Build complete: $(BUILD_DIR)/$(BINARY_NAME)"
+	@$(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(GUI_BINARY_NAME) $(GUI_PACKAGE)
+	@echo "Build complete: $(BUILD_DIR)/$(BINARY_NAME), $(BUILD_DIR)/$(GUI_BINARY_NAME)"
 
 # 交叉编译
 build-all: build-linux build-windows build-darwin

@@ -111,7 +111,7 @@ func (s *SOCKS5OverSSH) handleConnection(conn net.Conn) {
 	start := time.Now()
 	destConn, ruleAction, err := s.dialTarget(targetAddr, hostForRoute)
 	if err != nil {
-		s.logger.Warnf("[%SOCKS5] 连接目标 %s 失败: %v", targetAddr, err)
+		s.logger.Warnf("[SOCKS5] 连接目标 %s 失败: %v", targetAddr, err)
 		s.reply(conn, 0x05) // 0x05: Connection refused
 		return
 	}
