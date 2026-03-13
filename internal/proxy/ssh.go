@@ -15,12 +15,20 @@ import (
 	"github.com/Sesame2/gotun/internal/utils"
 )
 
+const (
+	// keepaliveInterval is the interval between SSH keepalive requests.
+	keepaliveInterval = 30 * time.Second
+	// keepaliveTimeout is the maximum time to wait for a keepalive response.
+	keepaliveTimeout = 15 * time.Second
+)
+
 // SSHClient 管理SSH连接
 type SSHClient struct {
 	client      *ssh.Client   // 这个是最终目标机器的连接
 	jumpClients []*ssh.Client // 这里存储所有跳板机的连接
 	config      *ssh.ClientConfig
 	logger      *logger.Logger
+	stopChan    chan struct{} // 用于停止 keepalive goroutine
 }
 
 type AuthConfig struct {
@@ -85,6 +93,7 @@ func NewSSHClient(cfg *config.Config, log *logger.Logger) (*SSHClient, error) {
 	sshClient := &SSHClient{
 		logger:      log,
 		jumpClients: []*ssh.Client{},
+		stopChan:    make(chan struct{}),
 	}
 
 	// 尝试连接所有跳板机
@@ -132,6 +141,7 @@ func NewSSHClient(cfg *config.Config, log *logger.Logger) (*SSHClient, error) {
 
 	sshClient.client = finalClient
 	log.Infof("已连接到目标服务器: %s", cfg.SSHServer)
+	go sshClient.keepAlive()
 	return sshClient, nil
 }
 
@@ -201,6 +211,10 @@ func trySingleConnection(user, addr string, timeout time.Duration, auths []ssh.A
 
 // Close 关闭所有连接（逆序关闭跳板机）
 func (s *SSHClient) Close() error {
+	if s.stopChan != nil {
+		close(s.stopChan)
+		s.stopChan = nil
+	}
 	if s.client != nil {
 		s.logger.Debug("关闭目标SSH连接")
 		s.client.Close()
@@ -215,6 +229,52 @@ func (s *SSHClient) Close() error {
 	}
 	s.jumpClients = nil
 	return nil
+}
+
+// keepAlive 定期向SSH服务器发送 keepalive 请求，防止空闲连接被服务器或防火墙断开。
+func (s *SSHClient) keepAlive() {
+	stopChan := s.stopChan // capture so we hold the reference even after Close sets it to nil
+	ticker := time.NewTicker(keepaliveInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if s.client == nil {
+				return
+			}
+			// Use a deadline-based timeout: set a deadline on the underlying connection
+			// so that SendRequest returns promptly on an unresponsive server.
+			// We run it in a goroutine and guard with our own timer so that even if the
+			// crypto/ssh layer never returns we won't block the ticker loop.
+			done := make(chan error, 1)
+			go func() {
+				_, _, err := s.client.SendRequest("keepalive@openssh.com", true, nil)
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				if err != nil {
+					s.logger.Debugf("SSH keepalive 失败: %v", err)
+				} else {
+					s.logger.Debug("SSH keepalive 成功")
+				}
+			case <-time.After(keepaliveTimeout):
+				// The server did not respond within the timeout window.
+				// Log a warning and close the connection so that the SendRequest
+				// goroutine can unblock and terminate.
+				s.logger.Warn("SSH keepalive 超时，连接可能已断开")
+				if s.client != nil {
+					s.client.Close()
+				}
+				return
+			case <-stopChan:
+				return
+			}
+		case <-stopChan:
+			return
+		}
+	}
 }
 
 func loadPrivateKey(path string) (ssh.Signer, error) {
