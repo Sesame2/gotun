@@ -1,6 +1,6 @@
 module github.com/Sesame2/gotun
 
-go 1.24.1
+go 1.25.5
 
 require (
 	github.com/spf13/cobra v1.10.1
@@ -8,13 +8,14 @@ require (
 	golang.org/x/term v0.35.0
 	golang.zx2c4.com/wireguard v0.0.0-20250521234502-f333402bd9cb
 	gopkg.in/yaml.v3 v3.0.1
-	gvisor.dev/gvisor v0.0.0-20251220000015-517913d17844
+	gvisor.dev/gvisor v0.0.0-20260312211231-b4724f244352
 )
 
 require (
 	github.com/google/btree v1.1.2 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
+	golang.org/x/exp v0.0.0-20231110203233-9a3e6036ecaa // indirect
 	golang.org/x/net v0.44.0 // indirect
 	golang.org/x/sys v0.36.0 // indirect
 	golang.org/x/time v0.12.0 // indirect
