@@ -18,6 +18,17 @@
   --info-color: #2196f3;
   --sidebar-active-bg-light: #e0e0e0;
   --sidebar-hover-bg-light: rgba(0, 0, 0, 0.04);
+  --focus-ring-color: #5b6cf9;
+}
+
+:root[data-theme="dark"] {
+  --text-primary: #ffffff;
+  --text-secondary: #b0b0b0;
+  --background-color: #1e1f27;
+  --background-paper: #282a36;
+  --divider-color: #3a3a4a;
+  --scroller-color: #797e94;
+  --focus-ring-color: #8e9afc;
 }
 
 * {
@@ -67,4 +78,29 @@ body {
   width: 100vw;
   height: 100vh;
   overflow: hidden;
+}
+
+button:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible,
+[role="combobox"]:focus-visible,
+.MuiButtonBase-root.Mui-focusVisible {
+  outline: 2px solid var(--focus-ring-color);
+  outline-offset: 3px;
+}
+
+.MuiDialog-paper {
+  overscroll-behavior: contain;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after,
+  :root .MuiSwitch-switchBase {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

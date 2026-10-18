@@ -15,21 +15,31 @@ import (
 )
 
 type SOCKS5OverSSH struct {
-	cfg      *config.Config
-	logger   *logger.Logger
-	ssh      *SSHClient
-	router   *router.Router
-	listener net.Listener
-	mu       sync.Mutex // 互斥锁，保证 Close 的线程安全
+	cfg         *config.Config
+	logger      *logger.Logger
+	ssh         *SSHClient
+	router      *router.Router
+	listener    net.Listener
+	mu          sync.Mutex // 互斥锁，保证 Close 的线程安全
+	connections connectionSet
 }
 
 // NewSOCKS5OverSSH 创建 SOCKS5 代理实例
 func NewSOCKS5OverSSH(cfg *config.Config, log *logger.Logger, sshClient *SSHClient, r *router.Router) (*SOCKS5OverSSH, error) {
+	var listener net.Listener
+	if cfg.SocksAddr != "" {
+		var err error
+		listener, err = net.Listen("tcp", cfg.SocksAddr)
+		if err != nil {
+			return nil, fmt.Errorf("SOCKS5 监听启动失败: %w", err)
+		}
+	}
 	return &SOCKS5OverSSH{
-		cfg:    cfg,
-		logger: log,
-		ssh:    sshClient,
-		router: r,
+		cfg:      cfg,
+		logger:   log,
+		ssh:      sshClient,
+		router:   r,
+		listener: listener,
 	}, nil
 }
 
@@ -41,14 +51,12 @@ func (s *SOCKS5OverSSH) Start() error {
 		return nil
 	}
 
-	l, err := net.Listen("tcp", addr)
-	if err != nil {
-		return fmt.Errorf("SOCKS5 监听启动失败: %w", err)
-	}
-
 	s.mu.Lock()
-	s.listener = l
+	l := s.listener
 	s.mu.Unlock()
+	if l == nil {
+		return nil
+	}
 
 	s.logger.Infof("SOCKS5 代理已启动，监听地址: %s", addr)
 
@@ -73,6 +81,7 @@ func (s *SOCKS5OverSSH) Start() error {
 
 // Close 优雅关闭服务
 func (s *SOCKS5OverSSH) Close() error {
+	s.connections.close()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -89,6 +98,10 @@ func (s *SOCKS5OverSSH) Close() error {
 // handleConnection 处理单个 SOCKS5 连接的主逻辑
 func (s *SOCKS5OverSSH) handleConnection(conn net.Conn) {
 	defer conn.Close()
+	if !s.connections.add(conn) {
+		return
+	}
+	defer s.connections.remove(conn)
 	clientAddr := conn.RemoteAddr().String()
 
 	// 1. 协商阶段 (Handshake)
@@ -116,6 +129,10 @@ func (s *SOCKS5OverSSH) handleConnection(conn net.Conn) {
 		return
 	}
 	defer destConn.Close()
+	if !s.connections.add(destConn) {
+		return
+	}
+	defer s.connections.remove(destConn)
 
 	// 4. 回复客户端成功 (Reply Success)
 	// Server: [VER, REP, RSV, ATYP, BND.ADDR, BND.PORT]
@@ -127,24 +144,8 @@ func (s *SOCKS5OverSSH) handleConnection(conn net.Conn) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	// Browser -> SSH/Target
-	go func() {
-		defer wg.Done()
-		io.Copy(destConn, conn)
-		// 如果是 TCP 连接，通常不需要手动 CloseWrite，但在某些场景下可以加速关闭
-		if c, ok := destConn.(*net.TCPConn); ok {
-			c.CloseWrite()
-		}
-	}()
-
-	// SSH/Target -> Browser
-	go func() {
-		defer wg.Done()
-		io.Copy(conn, destConn)
-		if c, ok := conn.(*net.TCPConn); ok {
-			c.CloseWrite()
-		}
-	}()
+	go transfer(&wg, destConn, conn, "client->"+ruleAction, s.logger)
+	go transfer(&wg, conn, destConn, ruleAction+"->client", s.logger)
 
 	wg.Wait()
 	s.logger.Debugf("[%s] 连接断开: %s, 耗时: %v", clientAddr, targetAddr, time.Since(start))
@@ -165,10 +166,15 @@ func (s *SOCKS5OverSSH) handshake(conn net.Conn) error {
 	if _, err := io.ReadFull(conn, buf[:nmethods]); err != nil {
 		return err
 	}
+	for _, method := range buf[:nmethods] {
+		if method == 0 {
+			_, err := conn.Write([]byte{0x05, 0x00})
+			return err
+		}
+	}
 
-	// 回复: VER=5, METHOD=0 (No Authentication Required)
-	_, err := conn.Write([]byte{0x05, 0x00})
-	return err
+	conn.Write([]byte{0x05, 0xff})
+	return fmt.Errorf("客户端未提供支持的 SOCKS5 认证方法")
 }
 
 // readRequest 读取并解析客户端请求，返回完整目标地址(host:port)和用于路由匹配的主机名
@@ -176,6 +182,10 @@ func (s *SOCKS5OverSSH) readRequest(conn net.Conn) (string, string, error) {
 	header := make([]byte, 4)
 	if _, err := io.ReadFull(conn, header); err != nil {
 		return "", "", err
+	}
+	if header[0] != 5 || header[2] != 0 {
+		s.reply(conn, 0x01)
+		return "", "", fmt.Errorf("无效的 SOCKS5 请求头")
 	}
 
 	if header[1] != 0x01 { // CMD: 0x01 = CONNECT
@@ -197,6 +207,10 @@ func (s *SOCKS5OverSSH) readRequest(conn net.Conn) (string, string, error) {
 			return "", "", err
 		}
 		domainLen := int(lenBuf[0])
+		if domainLen == 0 {
+			s.reply(conn, 0x08)
+			return "", "", fmt.Errorf("SOCKS5 目标域名不能为空")
+		}
 		domain := make([]byte, domainLen)
 		if _, err := io.ReadFull(conn, domain); err != nil {
 			return "", "", err
@@ -230,6 +244,9 @@ func (s *SOCKS5OverSSH) dialTarget(addr string, hostForRoute string) (net.Conn, 
 	// 1. 路由判断
 	if s.router != nil {
 		action = s.router.Match(hostForRoute)
+	}
+	if action == router.ActionReject {
+		return nil, "REJECT", fmt.Errorf("路由规则拒绝目标: %s", addr)
 	}
 
 	// 2. 根据动作执行连接

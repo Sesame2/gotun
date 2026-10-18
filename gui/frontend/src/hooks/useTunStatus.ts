@@ -64,8 +64,8 @@ export function useTunStatus(pollInterval: number = 2000): UseTunStatusReturn {
 
   // 轮询状态
   useEffect(() => {
-    // 仅在TUN运行时轮询
-    if (tunStatus?.status !== 'running') {
+    // 过渡状态也需要轮询，才能观察启动或停止完成。
+    if (!tunStatus || !['running', 'starting', 'stopping'].includes(tunStatus.status)) {
       return;
     }
 

@@ -34,21 +34,24 @@ import {
   Error as ErrorIcon,
   Schedule as ClockIcon,
   Router as RouterIcon,
-  Dns as DnsIcon,
   VpnKey as VpnIcon,
   AdminPanelSettings as AdminIcon,
   Lan as TunIcon,
   Public as GlobalIcon,
 } from '@mui/icons-material';
 import { useTheme } from '@mui/material/styles';
+import { useI18n } from '../../providers/I18nProvider';
 import { useProxyStatus } from '../../hooks/useProxyStatus';
 import { useProfiles } from '../../hooks/useConfig';
-import { useTunStatus, isTunRunning, isTunStarting, isTunStopped, isTunError } from '../../hooks/useTunStatus';
+import { useTunStatus, isTunRunning, isTunStarting, isTunError } from '../../hooks/useTunStatus';
 import {
   StartProxy,
   StopProxy,
   TestConnection,
 } from '../../../wailsjs/go/main/App';
+
+const getErrorMessage = (error: unknown, fallback: string) =>
+  error instanceof Error ? error.message : typeof error === 'string' ? error : fallback;
 
 // Tab面板组件
 interface TabPanelProps {
@@ -73,6 +76,7 @@ function TabPanel(props: TabPanelProps) {
 }
 
 const HomePage: React.FC = () => {
+  const { t } = useI18n();
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
   const { status, refresh: refreshStatus } = useProxyStatus(1000);
@@ -80,7 +84,6 @@ const HomePage: React.FC = () => {
   const {
     tunStatus,
     loading: tunLoading,
-    error: tunError,
     isAdmin,
     needsElevation,
     startTun,
@@ -121,7 +124,7 @@ const HomePage: React.FC = () => {
 
   const handleStart = async () => {
     if (!selectedProfileId) {
-      setMessage({ type: 'error', text: '请选择一个配置文件' });
+      setMessage({ type: 'error', text: t.home.selectProfileRequired });
       return;
     }
 
@@ -129,10 +132,10 @@ const HomePage: React.FC = () => {
     setMessage(null);
     try {
       await StartProxy(selectedProfileId);
-      setMessage({ type: 'success', text: '代理服务已启动' });
+      setMessage({ type: 'success', text: t.home.started });
       refreshStatus();
     } catch (err) {
-      setMessage({ type: 'error', text: err instanceof Error ? err.message : '启动失败' });
+      setMessage({ type: 'error', text: getErrorMessage(err, t.home.startFailed) });
     } finally {
       setActionLoading(false);
     }
@@ -143,10 +146,10 @@ const HomePage: React.FC = () => {
     setMessage(null);
     try {
       await StopProxy();
-      setMessage({ type: 'success', text: '代理服务已停止' });
+      setMessage({ type: 'success', text: t.home.stoppedMessage });
       refreshStatus();
     } catch (err) {
-      setMessage({ type: 'error', text: err instanceof Error ? err.message : '停止失败' });
+      setMessage({ type: 'error', text: getErrorMessage(err, t.home.stopFailed) });
     } finally {
       setActionLoading(false);
     }
@@ -154,7 +157,7 @@ const HomePage: React.FC = () => {
 
   const handleTest = async () => {
     if (!selectedProfileId) {
-      setMessage({ type: 'error', text: '请选择一个配置文件' });
+      setMessage({ type: 'error', text: t.home.selectProfileRequired });
       return;
     }
 
@@ -162,9 +165,9 @@ const HomePage: React.FC = () => {
     setMessage(null);
     try {
       await TestConnection(selectedProfileId);
-      setMessage({ type: 'success', text: 'SSH连接测试成功' });
+      setMessage({ type: 'success', text: t.home.connectionSuccess });
     } catch (err) {
-      setMessage({ type: 'error', text: err instanceof Error ? err.message : '连接测试失败' });
+      setMessage({ type: 'error', text: getErrorMessage(err, t.home.connectionFailed) });
     } finally {
       setTestLoading(false);
     }
@@ -173,7 +176,7 @@ const HomePage: React.FC = () => {
   // TUN 模式启动
   const handleStartTun = async () => {
     if (!selectedProfileId) {
-      setMessage({ type: 'error', text: '请选择一个配置文件' });
+      setMessage({ type: 'error', text: t.home.selectProfileRequired });
       return;
     }
 
@@ -187,10 +190,10 @@ const HomePage: React.FC = () => {
     setMessage(null);
     try {
       await startTun(selectedProfileId);
-      setMessage({ type: 'success', text: 'TUN代理服务已启动' });
+      setMessage({ type: 'success', text: t.home.tunStarted });
       refreshTunStatus();
     } catch (err) {
-      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'TUN启动失败' });
+      setMessage({ type: 'error', text: getErrorMessage(err, t.home.tunStartFailed) });
     } finally {
       setActionLoading(false);
     }
@@ -202,10 +205,10 @@ const HomePage: React.FC = () => {
     setMessage(null);
     try {
       await stopTun();
-      setMessage({ type: 'success', text: 'TUN代理服务已停止' });
+      setMessage({ type: 'success', text: t.home.tunStopped });
       refreshTunStatus();
     } catch (err) {
-      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'TUN停止失败' });
+      setMessage({ type: 'error', text: getErrorMessage(err, t.home.tunStopFailed) });
     } finally {
       setActionLoading(false);
     }
@@ -215,10 +218,10 @@ const HomePage: React.FC = () => {
   const handleElevationConfirm = async () => {
     setElevationDialogOpen(false);
     try {
-      setMessage({ type: 'info', text: '正在请求管理员权限，应用将重新启动...' });
+      setMessage({ type: 'info', text: t.home.elevationPending });
       await requestElevation();
     } catch (err) {
-      setMessage({ type: 'error', text: err instanceof Error ? err.message : '权限提升失败' });
+      setMessage({ type: 'error', text: getErrorMessage(err, t.home.elevationFailed) });
     }
   };
 
@@ -235,12 +238,18 @@ const HomePage: React.FC = () => {
   // TUN 状态
   const tunRunning = isTunRunning(tunStatus?.status);
   const tunStarting = isTunStarting(tunStatus?.status);
-  const tunStopped = isTunStopped(tunStatus?.status);
   const tunHasError = isTunError(tunStatus?.status);
   const isTunStopping = tunStatus?.status === 'stopping';
+  const httpBusy = isStarting || isStopping;
+  const tunBusy = tunStarting || isTunStopping;
 
   // 检查当前配置是否启用了TUN模式
   const selectedProfileHasTun = selectedProfile?.tunMode ?? false;
+  const canControlTun = selectedProfileHasTun || tunRunning || tunBusy;
+
+  useEffect(() => {
+    if (!canControlTun) setProxyTab(0);
+  }, [canControlTun]);
 
   const cardStyle = {
     borderRadius: 2,
@@ -249,12 +258,14 @@ const HomePage: React.FC = () => {
   };
 
   return (
-    <Box sx={{ maxWidth: 900, margin: '0 auto' }}>
+    <Box sx={{ maxWidth: 900, minWidth: 0, margin: '0 auto', overflowWrap: 'anywhere' }}>
       {message && (
         <Alert
           severity={message.type}
           sx={{ mb: 2 }}
           onClose={() => setMessage(null)}
+          closeText={t.common.close}
+          aria-live="polite"
         >
           {message.text}
         </Alert>
@@ -264,22 +275,25 @@ const HomePage: React.FC = () => {
       <Card sx={{ ...cardStyle, mb: 3 }}>
         <CardContent>
           <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
-            控制面板
+            {t.home.controlPanel}
           </Typography>
 
           {/* 配置选择 */}
           <Box sx={{ mb: 2 }}>
             <FormControl fullWidth size="small">
-              <InputLabel>选择配置</InputLabel>
+              <InputLabel id="home-profile-label">{t.home.selectProfile}</InputLabel>
               <Select
-                value={selectedProfileId}
-                label="选择配置"
+                id="home-profile"
+                name="profileId"
+                labelId="home-profile-label"
+                value={selectedProfile ? selectedProfileId : ''}
+                label={t.home.selectProfile}
                 onChange={(e) => setSelectedProfileId(e.target.value)}
-                disabled={isRunning || tunRunning || profilesLoading}
+                disabled={isRunning || httpBusy || tunRunning || tunBusy || actionLoading || profilesLoading}
               >
                 {profiles.map((profile) => (
                   <MenuItem key={profile.id} value={profile.id}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Box sx={{ display: 'flex', minWidth: 0, whiteSpace: 'normal', overflowWrap: 'anywhere', alignItems: 'center', gap: 1 }}>
                       {profile.name} ({profile.user}@{profile.host})
                       {profile.tunMode && (
                         <Chip label="TUN" size="small" color="secondary" sx={{ height: 20 }} />
@@ -293,57 +307,68 @@ const HomePage: React.FC = () => {
 
           {/* 代理模式 Tab */}
           <Tabs
+            aria-label={t.home.proxyModes}
+            variant="scrollable"
+            scrollButtons="auto"
             value={proxyTab}
             onChange={handleTabChange}
             sx={{ borderBottom: 1, borderColor: 'divider' }}
           >
-            <Tab icon={<RouterIcon />} label="HTTP/SOCKS5" iconPosition="start" />
+            <Tab id="proxy-tab-0" aria-controls="proxy-tabpanel-0" icon={<RouterIcon />} label="HTTP/SOCKS5" iconPosition="start" />
             <Tab
+              id="proxy-tab-1"
+              aria-controls="proxy-tabpanel-1"
               icon={<TunIcon />}
-              label="TUN模式"
+              label={t.home.tunMode}
               iconPosition="start"
-              disabled={!selectedProfileHasTun}
+              disabled={!canControlTun}
             />
           </Tabs>
 
           {/* HTTP/SOCKS5 代理控制 */}
           <TabPanel value={proxyTab} index={0}>
-            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-              {!isRunning ? (
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center' }}>
+              {!isRunning && !isStopping ? (
                 <Button
                   variant="contained"
                   color="primary"
                   startIcon={actionLoading ? <CircularProgress size={20} color="inherit" /> : <PlayIcon />}
+                  aria-busy={actionLoading}
                   onClick={handleStart}
-                  disabled={actionLoading || !selectedProfileId || profilesLoading || tunRunning}
+                  disabled={actionLoading || httpBusy || !selectedProfile || profilesLoading || tunRunning || tunBusy}
                   sx={{ minWidth: 100 }}
                 >
-                  {isStarting ? '启动中...' : '启动'}
+                  {isStarting ? t.home.starting : t.home.start}
                 </Button>
               ) : (
                 <Button
                   variant="contained"
                   color="error"
                   startIcon={actionLoading ? <CircularProgress size={20} color="inherit" /> : <StopIcon />}
+                  aria-busy={actionLoading}
                   onClick={handleStop}
-                  disabled={actionLoading}
+                  disabled={actionLoading || httpBusy}
                   sx={{ minWidth: 100 }}
                 >
-                  {isStopping ? '停止中...' : '停止'}
+                  {isStopping ? t.home.stopping : t.home.stop}
                 </Button>
               )}
-              <Tooltip title="测试连接">
+              <Tooltip title={t.home.testConnection}>
+                <span>
                 <IconButton
+                  aria-label={t.home.testConnection}
                   color="primary"
+                  aria-busy={testLoading}
                   onClick={handleTest}
-                  disabled={testLoading || isRunning || !selectedProfileId}
+                  disabled={testLoading || actionLoading || isRunning || httpBusy || tunRunning || tunBusy || !selectedProfile}
                 >
                   {testLoading ? <CircularProgress size={20} /> : <RefreshIcon />}
                 </IconButton>
+                </span>
               </Tooltip>
               {tunRunning && (
                 <Chip
-                  label="TUN模式运行中，请先停止TUN再启动HTTP代理"
+                  label={t.home.tunActiveWarning}
                   color="warning"
                   size="small"
                 />
@@ -353,9 +378,9 @@ const HomePage: React.FC = () => {
 
           {/* TUN 模式控制 */}
           <TabPanel value={proxyTab} index={1}>
-            {!selectedProfileHasTun ? (
+            {!canControlTun ? (
               <Alert severity="info">
-                当前配置未启用TUN模式，请在配置管理中开启TUN模式
+                {t.home.tunNotEnabled}
               </Alert>
             ) : (
               <Box>
@@ -363,12 +388,12 @@ const HomePage: React.FC = () => {
                   <Alert severity="warning" sx={{ mb: 2 }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                       <AdminIcon />
-                      TUN模式需要管理员权限才能运行
+                      {t.home.tunNeedsElevation}
                     </Box>
                   </Alert>
                 )}
-                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-                  {!tunRunning ? (
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center' }}>
+                  {!tunRunning && !isTunStopping ? (
                     <Button
                       variant="contained"
                       color="secondary"
@@ -381,36 +406,42 @@ const HomePage: React.FC = () => {
                           <VpnIcon />
                         )
                       }
-                      onClick={handleStartTun}
-                      disabled={actionLoading || !selectedProfileId || profilesLoading || isRunning}
+                      aria-busy={actionLoading}
+                  onClick={handleStartTun}
+                      disabled={actionLoading || tunLoading || tunBusy || !selectedProfile || profilesLoading || isRunning || httpBusy}
                       sx={{ minWidth: 120 }}
                     >
-                      {tunStarting ? '启动中...' : needsElevation && !isAdmin ? '以管理员启动' : '启动TUN'}
+                      {tunStarting ? t.home.starting : needsElevation && !isAdmin ? t.home.startAsAdmin : t.home.startTun}
                     </Button>
                   ) : (
                     <Button
                       variant="contained"
                       color="error"
                       startIcon={actionLoading ? <CircularProgress size={20} color="inherit" /> : <StopIcon />}
-                      onClick={handleStopTun}
-                      disabled={actionLoading}
+                      aria-busy={actionLoading}
+                  onClick={handleStopTun}
+                      disabled={actionLoading || tunLoading || tunBusy}
                       sx={{ minWidth: 120 }}
                     >
-                      {isTunStopping ? '停止中...' : '停止TUN'}
+                      {isTunStopping ? t.home.stopping : t.home.stopTun}
                     </Button>
                   )}
-                  <Tooltip title="测试连接">
+                  <Tooltip title={t.home.testConnection}>
+                    <span>
                     <IconButton
+                      aria-label={t.home.testConnection}
                       color="primary"
-                      onClick={handleTest}
-                      disabled={testLoading || tunRunning || !selectedProfileId}
+                      aria-busy={testLoading}
+                  onClick={handleTest}
+                      disabled={testLoading || actionLoading || tunLoading || tunRunning || tunBusy || isRunning || httpBusy || !selectedProfile}
                     >
                       {testLoading ? <CircularProgress size={20} /> : <RefreshIcon />}
                     </IconButton>
+                    </span>
                   </Tooltip>
                   {isRunning && (
                     <Chip
-                      label="HTTP代理运行中，请先停止HTTP代理再启动TUN"
+                      label={t.home.httpActiveWarning}
                       color="warning"
                       size="small"
                     />
@@ -418,7 +449,7 @@ const HomePage: React.FC = () => {
                   {isAdmin && (
                     <Chip
                       icon={<AdminIcon />}
-                      label="管理员模式"
+                      label={t.home.administratorMode}
                       color="success"
                       size="small"
                       variant="outlined"
@@ -450,11 +481,11 @@ const HomePage: React.FC = () => {
                 <Box sx={{ width: 24, height: 24, mr: 1, borderRadius: '50%', bgcolor: '#9e9e9e' }} />
               )}
               <Typography variant="body2" color="textSecondary">
-                HTTP状态
+                {t.home.httpStatus}
               </Typography>
             </Box>
             <Typography variant="h6" sx={{ fontWeight: 600 }}>
-              {isRunning ? '运行中' : isStarting ? '启动中' : isStopping ? '停止中' : isError ? '错误' : '已停止'}
+              {isRunning ? t.home.running : isStarting ? t.home.starting : isStopping ? t.home.stopping : isError ? t.home.error : t.home.stopped}
             </Typography>
             {isError && status.errorMessage && (
               <Typography variant="caption" color="error">
@@ -476,11 +507,11 @@ const HomePage: React.FC = () => {
                 <TunIcon sx={{ color: '#9e9e9e', mr: 1 }} />
               )}
               <Typography variant="body2" color="textSecondary">
-                TUN状态
+                {t.home.tunStatus}
               </Typography>
             </Box>
             <Typography variant="h6" sx={{ fontWeight: 600 }}>
-              {tunRunning ? '运行中' : tunStarting ? '启动中' : isTunStopping ? '停止中' : tunHasError ? '错误' : '已停止'}
+              {tunRunning ? t.home.running : tunStarting ? t.home.starting : isTunStopping ? t.home.stopping : tunHasError ? t.home.error : t.home.stopped}
             </Typography>
             {tunHasError && tunStatus?.errorMessage && (
               <Typography variant="caption" color="error">
@@ -490,7 +521,7 @@ const HomePage: React.FC = () => {
             {tunRunning && tunStatus?.isGlobal && (
               <Chip
                 icon={<GlobalIcon />}
-                label="全局"
+                label={t.home.global}
                 size="small"
                 color="secondary"
                 sx={{ mt: 0.5 }}
@@ -504,7 +535,7 @@ const HomePage: React.FC = () => {
             <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
               <RouterIcon sx={{ color: '#5b5c9d', mr: 1 }} />
               <Typography variant="body2" color="textSecondary">
-                HTTP代理
+                {t.home.httpProxy}
               </Typography>
             </Box>
             <Typography variant="h6" sx={{ fontWeight: 600 }}>
@@ -518,7 +549,7 @@ const HomePage: React.FC = () => {
             <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
               <ClockIcon sx={{ color: '#5b5c9d', mr: 1 }} />
               <Typography variant="body2" color="textSecondary">
-                运行时间
+                {t.home.uptime}
               </Typography>
             </Box>
             <Typography variant="h6" sx={{ fontWeight: 600 }}>
@@ -534,7 +565,7 @@ const HomePage: React.FC = () => {
           <CardContent>
             <Typography variant="h6" sx={{ mb: 2, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 1 }}>
               <TunIcon color="secondary" />
-              TUN 设备信息
+              {t.home.tunDeviceInfo}
             </Typography>
             <Box sx={{
               display: 'grid',
@@ -542,7 +573,7 @@ const HomePage: React.FC = () => {
               gap: 2
             }}>
               <Box>
-                <Typography variant="body2" color="textSecondary">设备名称</Typography>
+                <Typography variant="body2" color="textSecondary">{t.home.deviceName}</Typography>
                 <Typography variant="body1">{tunStatus.tunDevice || '-'}</Typography>
               </Box>
               <Box>
@@ -550,15 +581,15 @@ const HomePage: React.FC = () => {
                 <Typography variant="body1">{tunStatus.tunIP || '-'}</Typography>
               </Box>
               <Box>
-                <Typography variant="body2" color="textSecondary">模式</Typography>
+                <Typography variant="body2" color="textSecondary">{t.home.mode}</Typography>
                 <Chip
-                  label={tunStatus.isGlobal ? '全局代理' : '路由模式'}
+                  label={tunStatus.isGlobal ? t.home.globalProxy : t.home.routeMode}
                   size="small"
                   color={tunStatus.isGlobal ? 'secondary' : 'primary'}
                 />
               </Box>
               <Box>
-                <Typography variant="body2" color="textSecondary">运行时间</Typography>
+                <Typography variant="body2" color="textSecondary">{t.home.uptime}</Typography>
                 <Typography variant="body1">{tunStatus.uptime || '-'}</Typography>
               </Box>
             </Box>
@@ -568,7 +599,7 @@ const HomePage: React.FC = () => {
               <Box sx={{ mt: 2 }}>
                 <Divider sx={{ my: 2 }} />
                 <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                  路由规则 ({tunStatus.routes.length})
+                  {t.home.routeRules} ({tunStatus.routes.length})
                 </Typography>
                 <List dense sx={{ bgcolor: isDark ? '#1e1f29' : '#f5f5f5', borderRadius: 1 }}>
                   {tunStatus.routes.slice(0, 5).map((route, index) => (
@@ -579,7 +610,7 @@ const HomePage: React.FC = () => {
                   {tunStatus.routes.length > 5 && (
                     <ListItem>
                       <ListItemText
-                        primary={`... 还有 ${tunStatus.routes.length - 5} 条路由`}
+                        primary={t.home.moreRoutes.replace('{count}', String(tunStatus.routes.length - 5))}
                         primaryTypographyProps={{ color: 'textSecondary', fontSize: 13 }}
                       />
                     </ListItem>
@@ -593,7 +624,7 @@ const HomePage: React.FC = () => {
               <Box sx={{ mt: 2 }}>
                 <Divider sx={{ my: 2 }} />
                 <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                  NAT映射规则 ({tunStatus.natRules.length})
+                  {t.home.natRules} ({tunStatus.natRules.length})
                 </Typography>
                 <List dense sx={{ bgcolor: isDark ? '#1e1f29' : '#f5f5f5', borderRadius: 1 }}>
                   {tunStatus.natRules.map((rule, index) => (
@@ -613,7 +644,7 @@ const HomePage: React.FC = () => {
         <Card sx={cardStyle}>
           <CardContent>
             <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
-              配置详情: {selectedProfile.name}
+              {t.home.configDetails}: {selectedProfile.name}
             </Typography>
             <Box sx={{
               display: 'grid',
@@ -621,19 +652,19 @@ const HomePage: React.FC = () => {
               gap: 2
             }}>
               <Box>
-                <Typography variant="body2" color="textSecondary">主机</Typography>
+                <Typography variant="body2" color="textSecondary">{t.home.host}</Typography>
                 <Typography variant="body1">{selectedProfile.host}</Typography>
               </Box>
               <Box>
-                <Typography variant="body2" color="textSecondary">端口</Typography>
+                <Typography variant="body2" color="textSecondary">{t.home.port}</Typography>
                 <Typography variant="body1">{selectedProfile.port}</Typography>
               </Box>
               <Box>
-                <Typography variant="body2" color="textSecondary">用户</Typography>
+                <Typography variant="body2" color="textSecondary">{t.home.user}</Typography>
                 <Typography variant="body1">{selectedProfile.user}</Typography>
               </Box>
               <Box>
-                <Typography variant="body2" color="textSecondary">HTTP监听</Typography>
+                <Typography variant="body2" color="textSecondary">{t.home.httpListen}</Typography>
                 <Typography variant="body1">{selectedProfile.httpAddr}</Typography>
               </Box>
               <Box>
@@ -641,23 +672,23 @@ const HomePage: React.FC = () => {
                 <Typography variant="body1">{selectedProfile.socksAddr || '-'}</Typography>
               </Box>
               <Box>
-                <Typography variant="body2" color="textSecondary">系统代理</Typography>
+                <Typography variant="body2" color="textSecondary">{t.home.systemProxy}</Typography>
                 <Chip
-                  label={selectedProfile.systemProxy ? '已启用' : '已禁用'}
+                  label={selectedProfile.systemProxy ? t.home.enabled : t.home.disabled}
                   size="small"
                   color={selectedProfile.systemProxy ? 'success' : 'default'}
                 />
               </Box>
               <Box>
-                <Typography variant="body2" color="textSecondary">认证方式</Typography>
+                <Typography variant="body2" color="textSecondary">{t.home.authType}</Typography>
                 <Typography variant="body1">
-                  {selectedProfile.keyFile ? '密钥' : selectedProfile.password ? '密码' : '交互式'}
+                  {selectedProfile.keyFile ? t.home.keyAuth : selectedProfile.password ? t.home.password : t.home.interactive}
                 </Typography>
               </Box>
               <Box>
-                <Typography variant="body2" color="textSecondary">跳板机</Typography>
+                <Typography variant="body2" color="textSecondary">{t.home.jumpHost}</Typography>
                 <Typography variant="body1">
-                  {selectedProfile.jumpHosts?.length ? selectedProfile.jumpHosts.length + ' 个' : '无'}
+                  {selectedProfile.jumpHosts?.length ? t.home.jumpHostCount.replace('{count}', String(selectedProfile.jumpHosts.length)) : t.home.none}
                 </Typography>
               </Box>
             </Box>
@@ -668,7 +699,7 @@ const HomePage: React.FC = () => {
                 <Divider sx={{ my: 2 }} />
                 <Typography variant="subtitle2" sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
                   <TunIcon fontSize="small" color="secondary" />
-                  TUN 模式配置
+                  {t.home.tunConfig}
                 </Typography>
                 <Box sx={{
                   display: 'grid',
@@ -676,14 +707,14 @@ const HomePage: React.FC = () => {
                   gap: 2
                 }}>
                   <Box>
-                    <Typography variant="body2" color="textSecondary">TUN模式</Typography>
-                    <Chip label="已启用" size="small" color="secondary" />
+                    <Typography variant="body2" color="textSecondary">{t.home.tunMode}</Typography>
+                    <Chip label={t.home.enabled} size="small" color="secondary" />
                   </Box>
                   <Box>
-                    <Typography variant="body2" color="textSecondary">代理范围</Typography>
+                    <Typography variant="body2" color="textSecondary">{t.home.proxyScope}</Typography>
                     <Chip
                       icon={selectedProfile.tunGlobal ? <GlobalIcon /> : undefined}
-                      label={selectedProfile.tunGlobal ? '全局' : '静态路由'}
+                      label={selectedProfile.tunGlobal ? t.home.global : t.home.staticRoutes}
                       size="small"
                       color={selectedProfile.tunGlobal ? 'warning' : 'info'}
                     />
@@ -695,7 +726,7 @@ const HomePage: React.FC = () => {
                     </Typography>
                   </Box>
                   <Box>
-                    <Typography variant="body2" color="textSecondary">静态路由数</Typography>
+                    <Typography variant="body2" color="textSecondary">{t.home.routeCount}</Typography>
                     <Typography variant="body1">
                       {selectedProfile.tunRoutes?.length || 0}
                     </Typography>
@@ -712,13 +743,13 @@ const HomePage: React.FC = () => {
         <Card sx={cardStyle}>
           <CardContent sx={{ textAlign: 'center', py: 4 }}>
             <Typography variant="h6" color="textSecondary" sx={{ mb: 2 }}>
-              暂无配置文件
+              {t.home.noProfiles}
             </Typography>
             <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
-              请先在"配置管理"页面添加SSH配置
+              {t.home.addProfileHint}
             </Typography>
             <Button variant="contained" href="#/profiles">
-              添加配置
+              {t.home.addProfile}
             </Button>
           </CardContent>
         </Card>
@@ -726,26 +757,28 @@ const HomePage: React.FC = () => {
 
       {/* 权限提升确认对话框 */}
       <Dialog
+        aria-labelledby="tun-elevation-title"
+        aria-describedby="tun-elevation-description"
         open={elevationDialogOpen}
         onClose={() => setElevationDialogOpen(false)}
         maxWidth="sm"
         fullWidth
       >
-        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <DialogTitle id="tun-elevation-title" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <AdminIcon color="warning" />
-          需要管理员权限
+          {t.home.elevationTitle}
         </DialogTitle>
         <DialogContent>
-          <DialogContentText>
-            TUN模式需要创建虚拟网络设备和修改系统路由表，这需要管理员权限才能完成。
+          <DialogContentText id="tun-elevation-description">
+            {t.home.elevationDescription}
           </DialogContentText>
           <Alert severity="info" sx={{ mt: 2 }}>
-            点击"确认"后，应用将以管理员权限重新启动。请在系统弹出的权限请求中授权。
+            {t.home.elevationHint}
           </Alert>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setElevationDialogOpen(false)}>
-            取消
+            {t.common.cancel}
           </Button>
           <Button
             variant="contained"
@@ -753,7 +786,7 @@ const HomePage: React.FC = () => {
             startIcon={<AdminIcon />}
             onClick={handleElevationConfirm}
           >
-            确认提权
+            {t.home.confirmElevation}
           </Button>
         </DialogActions>
       </Dialog>

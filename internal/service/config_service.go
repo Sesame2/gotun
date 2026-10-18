@@ -3,8 +3,10 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -141,17 +143,31 @@ func (s *ConfigService) Load() error {
 func (s *ConfigService) Save() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.saveLocked()
+}
 
+func (s *ConfigService) saveLocked() error {
 	data, err := json.MarshalIndent(s.data, "", "  ")
 	if err != nil {
 		return fmt.Errorf("序列化配置失败: %v", err)
 	}
 
-	if err := os.WriteFile(s.configPath, data, 0644); err != nil {
+	file, err := os.OpenFile(s.configPath, os.O_WRONLY|os.O_CREATE, 0600)
+	if err != nil {
 		return fmt.Errorf("写入配置文件失败: %v", err)
 	}
-
-	return nil
+	defer file.Close()
+	// Existing configurations may still have the old world-readable permissions.
+	if err := file.Chmod(0600); err != nil {
+		return fmt.Errorf("设置配置文件权限失败: %v", err)
+	}
+	if err := file.Truncate(0); err != nil {
+		return fmt.Errorf("写入配置文件失败: %v", err)
+	}
+	if _, err := file.Write(data); err != nil {
+		return fmt.Errorf("写入配置文件失败: %v", err)
+	}
+	return file.Close()
 }
 
 // GetSettings 获取应用设置
@@ -164,16 +180,33 @@ func (s *ConfigService) GetSettings() AppSettings {
 // UpdateSettings 更新应用设置
 func (s *ConfigService) UpdateSettings(settings AppSettings) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := s.data.Settings
 	s.data.Settings = settings
-	s.mu.Unlock()
-	return s.Save()
+	if err := s.saveLocked(); err != nil {
+		s.data.Settings = previous
+		return err
+	}
+	return nil
 }
 
 // GetProfiles 获取所有配置文件
 func (s *ConfigService) GetProfiles() []SSHProfile {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.data.Profiles
+	profiles := make([]SSHProfile, len(s.data.Profiles))
+	for i, profile := range s.data.Profiles {
+		profiles[i] = cloneProfile(profile)
+	}
+	return profiles
+}
+
+func cloneProfile(profile SSHProfile) SSHProfile {
+	profile.JumpHosts = slices.Clone(profile.JumpHosts)
+	profile.JumpHostsList = slices.Clone(profile.JumpHostsList)
+	profile.TunRoutes = slices.Clone(profile.TunRoutes)
+	profile.TunNAT = slices.Clone(profile.TunNAT)
+	return profile
 }
 
 // GetProfile 获取指定配置文件
@@ -183,6 +216,7 @@ func (s *ConfigService) GetProfile(id string) (*SSHProfile, error) {
 
 	for _, p := range s.data.Profiles {
 		if p.ID == id {
+			p = cloneProfile(p)
 			return &p, nil
 		}
 	}
@@ -219,7 +253,7 @@ func (s *ConfigService) AddProfile(profile SSHProfile) error {
 		profile.HTTPAddr = ":8080"
 	}
 
-	s.data.Profiles = append(s.data.Profiles, profile)
+	s.data.Profiles = append(s.data.Profiles, cloneProfile(profile))
 
 	s.mu.Unlock()
 	return s.Save()
@@ -233,7 +267,7 @@ func (s *ConfigService) UpdateProfile(profile SSHProfile) error {
 		if p.ID == profile.ID {
 			profile.CreatedAt = p.CreatedAt
 			profile.UpdatedAt = time.Now()
-			s.data.Profiles[i] = profile
+			s.data.Profiles[i] = cloneProfile(profile)
 			s.mu.Unlock()
 			return s.Save()
 		}
@@ -278,13 +312,13 @@ func (s *ConfigService) SetLastUsed(id string) error {
 // ProfileToConfig 将SSH配置文件转换为Config
 func (s *ConfigService) ProfileToConfig(profile *SSHProfile) *config.Config {
 	cfg := config.NewConfig()
-	cfg.SSHServer = fmt.Sprintf("%s:%s", profile.Host, profile.Port)
+	cfg.SSHServer = net.JoinHostPort(profile.Host, profile.Port)
 	cfg.SSHUser = profile.User
 	cfg.SSHPassword = profile.Password
 	cfg.SSHKeyFile = profile.KeyFile
 	cfg.SSHPort = profile.Port
-	cfg.JumpHosts = profile.JumpHosts
-	cfg.JumpHostsList = profile.JumpHostsList
+	cfg.JumpHosts = slices.Clone(profile.JumpHosts)
+	cfg.JumpHostsList = slices.Clone(profile.JumpHostsList)
 	cfg.ListenAddr = profile.HTTPAddr
 	cfg.SocksAddr = profile.SocksAddr
 	cfg.SystemProxy = profile.SystemProxy
@@ -296,7 +330,7 @@ func (s *ConfigService) ProfileToConfig(profile *SSHProfile) *config.Config {
 	if profile.TunCIDR != "" {
 		cfg.TunCIDR = profile.TunCIDR
 	}
-	cfg.TunRoute = profile.TunRoutes
+	cfg.TunRoute = slices.Clone(profile.TunRoutes)
 
 	// 转换 NAT 规则
 	for _, nat := range profile.TunNAT {
@@ -317,6 +351,7 @@ func (s *ConfigService) GetDefaultProfile() *SSHProfile {
 	if s.data.Settings.DefaultProfile != "" {
 		for _, p := range s.data.Profiles {
 			if p.ID == s.data.Settings.DefaultProfile {
+				p = cloneProfile(p)
 				return &p
 			}
 		}
@@ -331,5 +366,9 @@ func (s *ConfigService) GetDefaultProfile() *SSHProfile {
 		}
 	}
 
-	return latest
+	if latest == nil {
+		return nil
+	}
+	profile := cloneProfile(*latest)
+	return &profile
 }

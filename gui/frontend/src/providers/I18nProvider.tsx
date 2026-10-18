@@ -1,10 +1,11 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import locales, { LocaleKey, LocaleMessages } from '../locales';
-import { GetSettings, UpdateSettings } from '../../wailsjs/go/main/App';
+import { GetSettings } from '../../wailsjs/go/main/App';
+import { saveSettingsPatch } from '../settings';
 
 interface I18nContextType {
   locale: LocaleKey;
-  setLocale: (locale: LocaleKey) => void;
+  setLocale: (locale: LocaleKey) => Promise<boolean>;
   t: LocaleMessages;
 }
 
@@ -24,12 +25,13 @@ interface I18nProviderProps {
 
 export const I18nProvider: React.FC<I18nProviderProps> = ({ children }) => {
   const [locale, setLocaleState] = useState<LocaleKey>('zh-CN');
+  const hasSavedPreference = useRef(false);
 
   // 从设置加载语言
   useEffect(() => {
     GetSettings()
       .then((settings) => {
-        if (settings.language && (settings.language === 'zh-CN' || settings.language === 'en-US')) {
+        if (!hasSavedPreference.current && (settings.language === 'zh-CN' || settings.language === 'en-US')) {
           setLocaleState(settings.language as LocaleKey);
         }
       })
@@ -37,14 +39,20 @@ export const I18nProvider: React.FC<I18nProviderProps> = ({ children }) => {
   }, []);
 
   const setLocale = useCallback(async (newLocale: LocaleKey) => {
-    setLocaleState(newLocale);
     try {
-      const settings = await GetSettings();
-      await UpdateSettings({ ...settings, language: newLocale });
+      await saveSettingsPatch({ language: newLocale });
+      hasSavedPreference.current = true;
+      setLocaleState(newLocale);
+      return true;
     } catch (err) {
       console.error('Failed to save language setting:', err);
+      return false;
     }
   }, []);
+
+  useEffect(() => {
+    document.documentElement.lang = locale;
+  }, [locale]);
 
   const t = locales[locale];
 

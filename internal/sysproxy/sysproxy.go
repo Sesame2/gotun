@@ -32,20 +32,20 @@ func NewManager(log *logger.Logger, httpListenAddr, socksListenAddr string) *Man
 	}
 
 	// 如果主机为空，使用localhost
-	if host == "" || host == "0.0.0.0" {
+	if host == "" || host == "0.0.0.0" || host == "::" {
 		host = "127.0.0.1"
 	}
-	httpAddr := fmt.Sprintf("%s:%s", host, portStr)
+	httpAddr := net.JoinHostPort(host, portStr)
 
 	// 解析 socksAddr
 	var finalSocksAddr string
 	if socksListenAddr != "" {
 		shost, sportStr, serr := net.SplitHostPort(socksListenAddr)
 		if serr == nil {
-			if shost == "" || shost == "0.0.0.0" {
+			if shost == "" || shost == "0.0.0.0" || shost == "::" {
 				shost = "127.0.0.1"
 			}
-			finalSocksAddr = fmt.Sprintf("%s:%s", shost, sportStr)
+			finalSocksAddr = net.JoinHostPort(shost, sportStr)
 		}
 	}
 

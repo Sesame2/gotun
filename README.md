@@ -112,7 +112,7 @@ The binary will be placed under `build/`.
 
 ### `go install`
 
-With Go 1.17+:
+With Go 1.25.5+:
 
 ```bash
 go install github.com/Sesame2/gotun/cmd/gotun@latest

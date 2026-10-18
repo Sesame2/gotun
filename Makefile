@@ -12,6 +12,8 @@ GOTEST=$(GOCMD) test
 GOMOD=$(GOCMD) mod
 GOVET=$(GOCMD) vet
 GOLINT=golangci-lint
+NPM=npm
+TEST_PACKAGES=./cmd/... ./internal/...
 
 # 系统信息
 GOOS=$(shell go env GOOS)
@@ -21,7 +23,8 @@ GOARCH=$(shell go env GOARCH)
 PLATFORMS=linux/amd64 linux/arm64 windows/amd64 windows/arm64 darwin/amd64 darwin/arm64
 
 .PHONY: all build clean test lint vet tidy run help build-all build-release \
-	gui gui-dev gui-build gui-build-mac gui-build-windows gui-clean
+	gui gui-dev gui-build gui-build-mac gui-build-windows gui-clean \
+	test-race test-coverage test-all test-gui test-frontend gui-bindings gui-generate-bindings frontend-install frontend-build
 
 all: lint test build
 
@@ -97,7 +100,30 @@ clean:
 # 运行测试
 test:
 	@echo "Running tests..."
-	@$(GOTEST) -v ./...
+	@$(GOTEST) -count=1 $(TEST_PACKAGES)
+
+test-race:
+	@$(GOTEST) -race -count=1 $(TEST_PACKAGES)
+
+test-coverage:
+	@mkdir -p $(BUILD_DIR)
+	@$(GOTEST) -race -count=1 -coverprofile=$(BUILD_DIR)/coverage.out $(TEST_PACKAGES)
+	@$(GOCMD) tool cover -func=$(BUILD_DIR)/coverage.out
+
+gui-bindings: gui-generate-bindings
+
+frontend-install: gui-install
+
+frontend-build: gui-bindings frontend-install
+	@cd $(GUI_DIR)/frontend && $(NPM) run build
+
+test-frontend: gui-bindings frontend-install
+	@cd $(GUI_DIR)/frontend && $(NPM) test
+
+test-gui: frontend-build
+	@cd $(GUI_DIR) && $(GOTEST) -race -count=1 ./...
+
+test-all: test test-frontend test-gui
 
 # 运行代码质量检查
 lint:
@@ -111,7 +137,7 @@ lint:
 # 运行静态代码分析
 vet:
 	@echo "Running vet..."
-	@$(GOVET) ./...
+	@$(GOVET) $(TEST_PACKAGES)
 
 # 更新依赖
 tidy:
@@ -137,6 +163,11 @@ help:
 	@echo "  package-release - Build and package release files"
 	@echo "  clean         - Remove build artifacts"
 	@echo "  test          - Run tests"
+	@echo "  test-race     - Run core tests with race detection"
+	@echo "  test-coverage - Write core coverage to build/coverage.out"
+	@echo "  test-all      - Test core, frontend and GUI (Wails + Node required)"
+	@echo "  test-gui      - Build frontend and test the GUI Go module"
+	@echo "  test-frontend - Test frontend hooks and page interactions"
 	@echo "  lint          - Run linter"
 	@echo "  vet           - Run go vet"
 	@echo "  tidy          - Tidy go modules"
@@ -174,7 +205,7 @@ GUI_VERSION=$(VERSION)
 check-wails:
 	@if ! command -v wails > /dev/null 2>&1; then \
 		echo "Error: wails is not installed. Please install it first:"; \
-		echo "  go install github.com/wailsapp/wails/v2/cmd/wails@latest"; \
+		echo "  go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.1"; \
 		exit 1; \
 	fi
 
@@ -184,9 +215,9 @@ gui-dev: check-wails
 	@cd $(GUI_DIR) && wails dev
 
 # GUI 当前平台构建
-gui: check-wails
+gui: check-wails frontend-build
 	@echo "Building GUI for current platform..."
-	@cd $(GUI_DIR) && wails build -ldflags "-X main.Version=$(GUI_VERSION)"
+	@cd $(GUI_DIR) && wails build -s -skipbindings -m -nosyncgomod -ldflags "-X main.Version=$(GUI_VERSION)"
 	@echo "GUI build complete!"
 
 # GUI 生产构建
@@ -195,6 +226,8 @@ gui-build: gui
 # 生成绑定文件（跨平台构建前必须先执行）
 gui-generate-bindings: check-wails
 	@echo "Generating Wails bindings..."
+	@mkdir -p $(GUI_DIR)/frontend/dist
+	@test -f $(GUI_DIR)/frontend/dist/index.html || cp $(GUI_DIR)/frontend/index.html $(GUI_DIR)/frontend/dist/index.html
 	@cd $(GUI_DIR) && wails generate module
 
 # macOS 构建 (通用二进制)
@@ -230,7 +263,7 @@ gui-clean:
 # 安装 GUI 前端依赖
 gui-install:
 	@echo "Installing GUI frontend dependencies..."
-	@cd $(GUI_DIR)/frontend && npm install
+	@cd $(GUI_DIR)/frontend && $(NPM) ci --no-audit --no-fund
 	@echo "GUI dependencies installed"
 
 # 创建 macOS DMG 安装包
