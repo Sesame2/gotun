@@ -83,19 +83,30 @@ func TestLogLevels(t *testing.T) {
 }
 
 func TestDebugLogLevel(t *testing.T) {
-	// Debug 需要 verbose=true 并且 level 设置为 LevelDebug
 	logger := NewLogger(true)
-	logger.SetLevel(LevelDebug)
 
-	var receivedLevel string
+	var receivedLevels, receivedMessages []string
 	logger.SetCallback(func(level, message string) {
-		receivedLevel = level
+		receivedLevels = append(receivedLevels, level)
+		receivedMessages = append(receivedMessages, message)
 	})
 
 	logger.Debug("test debug")
+	logger.Debugf("formatted debug %d", 42)
 
-	if receivedLevel != "DEBUG" {
-		t.Errorf("Expected level DEBUG, got %s", receivedLevel)
+	if len(receivedLevels) != 2 {
+		t.Fatalf("verbose constructor emitted %d debug callbacks, want 2", len(receivedLevels))
+	}
+	for i, wantMessage := range []string{"test debug", "formatted debug 42"} {
+		if receivedLevels[i] != "DEBUG" || receivedMessages[i] != wantMessage {
+			t.Errorf("debug callback %d = %q %q, want DEBUG %q", i, receivedLevels[i], receivedMessages[i], wantMessage)
+		}
+	}
+	logger.SetLevel(LevelInfo)
+	logger.Debug("filtered by explicit level")
+	logger.Debugf("filtered by explicit level: %d", 42)
+	if len(receivedLevels) != 2 {
+		t.Fatal("verbose mode ignored the explicitly configured INFO threshold")
 	}
 }
 
@@ -123,6 +134,7 @@ func TestDebugNotLoggedInNonVerboseMode(t *testing.T) {
 	})
 
 	logger.Debug("This should not trigger callback")
+	logger.Debugf("This should not trigger callback: %d", 42)
 
 	if callbackCalled {
 		t.Error("Debug message should not trigger callback in non-verbose mode")

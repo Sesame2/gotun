@@ -23,8 +23,11 @@ func ReadPasswordFromTerminal(prompt string) (string, error) {
 
 // 获取SSH密码，优先使用配置中的密码，否则则交互式获取密码
 func GetSSHPassword(configPassword string, interactive bool, user, server string) (string, error) {
-	if configPassword != "" && !interactive {
+	if configPassword != "" {
 		return configPassword, nil
+	}
+	if !interactive {
+		return "", fmt.Errorf("未配置SSH密码且未启用交互式认证")
 	}
 
 	// 交互式获取密码

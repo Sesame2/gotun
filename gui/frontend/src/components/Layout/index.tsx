@@ -3,7 +3,6 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   Home as HomeIcon,
   Settings as SettingsIcon,
-  CloudQueue as CloudIcon,
   ListAlt as LogsIcon,
   Dns as ProfilesIcon,
 } from '@mui/icons-material';
@@ -61,6 +60,10 @@ const Layout: React.FC = () => {
 
   return (
     <div className={`layout ${isDark ? 'dark' : ''}`}>
+      <a className="skip-link" href="#main-content" onClick={(event) => {
+        event.preventDefault();
+        document.getElementById('main-content')?.focus();
+      }}>{t.common.skipToContent}</a>
       {/* 窗口拖动区域 */}
       <div className="titlebar" />
 
@@ -68,11 +71,11 @@ const Layout: React.FC = () => {
         className="layout-sidebar"
       >
         <div className="logo">
-          <img src={logoImg} alt="GoTun" />
+          <img src={logoImg} alt="GoTun" width="32" height="32" />
           <h1>GoTun</h1>
         </div>
 
-        <nav className="nav-menu">
+        <nav className="nav-menu" aria-label={t.nav.label}>
           {navItems.map((item) => (
             <NavLink
               key={item.path}
@@ -87,19 +90,21 @@ const Layout: React.FC = () => {
 
         <div className="status-card">
           <div className="status-title">{t.home.proxyStatus}</div>
-          <div className="status-value">
-            <span className={`status-dot ${getStatusClass()}`}></span>
+          <div className="status-value" role="status" aria-live="polite" aria-label={t.home.proxyStatus}>
+            <span aria-hidden="true" className={`status-dot ${getStatusClass()}`}></span>
             {getStatusText()}
           </div>
           {status.status === 'running' && status.uptime && (
             <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>
-              运行时间: {status.uptime}
+              {t.home.uptime}: {status.uptime}
             </div>
           )}
         </div>
       </aside>
 
       <main
+        id="main-content"
+        tabIndex={-1}
         className="layout-content"
       >
         <header className="header">

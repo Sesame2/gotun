@@ -52,7 +52,6 @@ func (a *App) startup(ctx context.Context) {
 	// 初始化配置服务
 	configSvc, err := service.NewConfigService()
 	if err != nil {
-		wailsRuntime.LogError(ctx, fmt.Sprintf("初始化配置服务失败: %v", err))
 		a.AddLog("ERROR", fmt.Sprintf("初始化配置服务失败: %v", err))
 	} else {
 		a.configService = configSvc
@@ -70,10 +69,14 @@ func (a *App) startup(ctx context.Context) {
 	})
 
 	// 应用配置
-	settings := a.configService.GetSettings()
-	a.proxyService.SetVerbose(settings.Verbose)
-	if settings.LogFile != "" {
-		a.proxyService.SetLogFile(settings.LogFile)
+	if a.configService != nil {
+		settings := a.configService.GetSettings()
+		a.proxyService.SetVerbose(settings.Verbose)
+		if settings.LogFile != "" {
+			if err := a.proxyService.SetLogFile(settings.LogFile); err != nil {
+				a.AddLog("ERROR", fmt.Sprintf("设置日志文件失败: %v", err))
+			}
+		}
 	}
 
 	a.AddLog("INFO", "GoTun GUI 启动完成")
@@ -114,10 +117,9 @@ func (a *App) StartProxy(profileID string) error {
 
 	// 转换配置
 	cfg := a.configService.ProfileToConfig(profile)
-	a.proxyService.SetConfig(cfg)
 
 	// 启动代理
-	if err := a.proxyService.Start(); err != nil {
+	if err := a.proxyService.StartWithConfig(cfg); err != nil {
 		a.AddLog("ERROR", fmt.Sprintf("启动代理失败: %v", err))
 		return err
 	}
@@ -526,12 +528,13 @@ func (a *App) OpenURL(url string) {
 // SetAutoStart 设置开机自启动
 func (a *App) SetAutoStart(enabled bool) error {
 	// 更新设置
-	if a.configService != nil {
-		settings := a.configService.GetSettings()
-		settings.AutoStart = enabled
-		if err := a.configService.UpdateSettings(settings); err != nil {
-			return err
-		}
+	if a.configService == nil {
+		return fmt.Errorf("配置服务未初始化")
+	}
+	settings := a.configService.GetSettings()
+	settings.AutoStart = enabled
+	if err := a.configService.UpdateSettings(settings); err != nil {
+		return err
 	}
 
 	// macOS: 使用 launchctl 管理登录项
@@ -544,12 +547,13 @@ func (a *App) SetAutoStart(enabled bool) error {
 // SetMinimizeToTray 设置关闭时最小化到托盘
 func (a *App) SetMinimizeToTray(enabled bool) error {
 	// 更新设置
-	if a.configService != nil {
-		settings := a.configService.GetSettings()
-		settings.MinimizeToTray = enabled
-		if err := a.configService.UpdateSettings(settings); err != nil {
-			return err
-		}
+	if a.configService == nil {
+		return fmt.Errorf("配置服务未初始化")
+	}
+	settings := a.configService.GetSettings()
+	settings.MinimizeToTray = enabled
+	if err := a.configService.UpdateSettings(settings); err != nil {
+		return err
 	}
 	a.AddLog("INFO", fmt.Sprintf("最小化到托盘设置已更新: %v", enabled))
 	return nil

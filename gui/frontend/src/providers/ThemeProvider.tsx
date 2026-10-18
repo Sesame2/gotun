@@ -1,12 +1,13 @@
-import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useRef } from 'react';
 import { ThemeProvider as MuiThemeProvider, createTheme, Theme, PaletteMode } from '@mui/material';
-import { GetSettings, UpdateSettings } from '../../wailsjs/go/main/App';
+import { GetSettings } from '../../wailsjs/go/main/App';
+import { saveSettingsPatch } from '../settings';
 
 type ThemeMode = 'light' | 'dark' | 'system';
 
 interface ThemeContextType {
   mode: ThemeMode;
-  setMode: (mode: ThemeMode) => void;
+  setMode: (mode: ThemeMode) => Promise<boolean>;
   actualMode: PaletteMode;
 }
 
@@ -34,9 +35,10 @@ const createAppTheme = (mode: PaletteMode): Theme => {
     palette: {
       mode,
       primary: {
-        main: '#5b6cf9',
+        main: isDark ? '#8e9afc' : '#5b6cf9',
         light: '#8e9afc',
         dark: '#3f4cc6',
+        contrastText: isDark ? '#1a1a2e' : '#ffffff',
       },
       secondary: {
         main: '#ff7043',
@@ -69,7 +71,7 @@ const createAppTheme = (mode: PaletteMode): Theme => {
       },
     },
     components: {
-      MuiCard: {
+      MuiPaper: {
         styleOverrides: {
           root: {
             backgroundImage: 'none',
@@ -103,12 +105,13 @@ interface ThemeProviderProps {
 export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
   const [mode, setModeState] = useState<ThemeMode>('dark');
   const [systemMode, setSystemMode] = useState<PaletteMode>(getSystemTheme());
+  const hasSavedPreference = useRef(false);
 
   // 从设置加载主题
   useEffect(() => {
     GetSettings()
       .then((settings) => {
-        if (settings.theme) {
+        if (!hasSavedPreference.current && ['light', 'dark', 'system'].includes(settings.theme)) {
           setModeState(settings.theme as ThemeMode);
         }
       })
@@ -127,17 +130,24 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
   }, []);
 
   const setMode = async (newMode: ThemeMode) => {
-    setModeState(newMode);
     try {
-      const settings = await GetSettings();
-      await UpdateSettings({ ...settings, theme: newMode });
+      await saveSettingsPatch({ theme: newMode });
+      hasSavedPreference.current = true;
+      setModeState(newMode);
+      return true;
     } catch (err) {
       console.error('Failed to save theme setting:', err);
+      return false;
     }
   };
 
   const actualMode: PaletteMode = mode === 'system' ? systemMode : mode as PaletteMode;
   const theme = useMemo(() => createAppTheme(actualMode), [actualMode]);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = actualMode;
+    document.documentElement.style.colorScheme = actualMode;
+  }, [actualMode]);
 
   return (
     <ThemeContext.Provider value={{ mode, setMode, actualMode }}>

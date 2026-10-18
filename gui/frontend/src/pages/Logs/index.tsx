@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Box,
   Card,
@@ -12,6 +12,10 @@ import {
   Chip,
   Snackbar,
   Alert,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
 } from '@mui/material';
 import {
   Delete as ClearIcon,
@@ -24,10 +28,18 @@ import { useTheme } from '@mui/material/styles';
 import { GetLogs, ClearLogs, SaveFileDialog, SaveLogsToFile } from '../../../wailsjs/go/main/App';
 import { EventsOn, EventsOff } from '../../../wailsjs/runtime/runtime';
 import { main } from '../../../wailsjs/go/models';
+import { useI18n } from '../../providers/I18nProvider';
 
 type LogEntry = main.LogEntry;
 
+const mergeLogs = (history: LogEntry[], incoming: LogEntry[]): LogEntry[] => {
+  const byID = new Map(history.map(entry => [entry.id, entry]));
+  incoming.forEach(entry => byID.set(entry.id, entry));
+  return Array.from(byID.values()).sort((a, b) => a.id - b.id).slice(-1000);
+};
+
 const LogsPage: React.FC = () => {
+  const { t } = useI18n();
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -35,20 +47,30 @@ const LogsPage: React.FC = () => {
   const [autoScroll, setAutoScroll] = useState(true);
   const [searchText, setSearchText] = useState('');
   const [filter, setFilter] = useState<string>('all');
+  const [clearDialogOpen, setClearDialogOpen] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [clearError, setClearError] = useState<string | null>(null);
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({ open: false, message: '', severity: 'success' });
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const ignoreInitialLogs = useRef(false);
 
   // 加载初始日志
   useEffect(() => {
+    let active = true;
     const loadLogs = async () => {
       try {
         const data = await GetLogs();
-        setLogs(data || []);
+        if (active && !ignoreInitialLogs.current) {
+          setLogs(current => mergeLogs(data || [], current));
+        }
       } catch (err) {
+        if (!active) return;
         console.error('加载日志失败:', err);
+        setSnackbar({ open: true, message: `${t.logs.loadFailed}: ${err instanceof Error ? err.message : String(err)}`, severity: 'error' });
       }
     };
     loadLogs();
+    return () => { active = false; };
   }, []);
 
   // 监听实时日志事件
@@ -56,14 +78,7 @@ const LogsPage: React.FC = () => {
     if (paused) return;
 
     const handleNewLog = (entry: LogEntry) => {
-      setLogs(prev => {
-        const newLogs = [...prev, entry];
-        // 限制前端日志数量
-        if (newLogs.length > 1000) {
-          return newLogs.slice(-1000);
-        }
-        return newLogs;
-      });
+      setLogs(prev => mergeLogs(prev, [entry]));
     };
 
     EventsOn('log:new', handleNewLog);
@@ -81,38 +96,48 @@ const LogsPage: React.FC = () => {
   }, [logs, autoScroll, paused]);
 
   const handleClear = async () => {
+    if (clearing) return;
+    setClearing(true);
+    setClearError(null);
     try {
       await ClearLogs();
+      ignoreInitialLogs.current = true;
       setLogs([]);
+      setClearDialogOpen(false);
     } catch (err) {
       console.error('清空日志失败:', err);
+      setClearError(`${t.logs.clearFailed}: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setClearing(false);
     }
   };
 
   const handleExport = async () => {
     try {
-      const defaultName = `gotun-logs-${new Date().toISOString().split('T')[0]}.txt`;
-      const filePath = await SaveFileDialog('保存日志文件', defaultName);
+      const now = new Date();
+      const date = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-');
+      const defaultName = `gotun-logs-${date}.txt`;
+      const filePath = await SaveFileDialog(t.logs.saveDialogTitle, defaultName);
       if (filePath) {
         await SaveLogsToFile(filePath);
-        setSnackbar({ open: true, message: '日志已保存', severity: 'success' });
+        setSnackbar({ open: true, message: t.logs.saveSuccess, severity: 'success' });
       }
     } catch (err) {
       console.error('保存日志失败:', err);
-      setSnackbar({ open: true, message: '保存日志失败', severity: 'error' });
+      setSnackbar({ open: true, message: t.logs.saveFailed, severity: 'error' });
     }
   };
 
   const getLogColor = (level: string) => {
     switch (level) {
       case 'ERROR':
-        return '#f44336';
+        return isDark ? '#f44336' : '#c62828';
       case 'WARN':
-        return '#ff9800';
+        return isDark ? '#ff9800' : '#9a4d00';
       case 'INFO':
-        return '#2196f3';
+        return isDark ? '#2196f3' : '#1565c0';
       case 'DEBUG':
-        return '#9e9e9e';
+        return isDark ? '#9e9e9e' : '#616161';
       default:
         return isDark ? '#fff' : '#000';
     }
@@ -131,15 +156,16 @@ const LogsPage: React.FC = () => {
   };
 
   return (
-    <Box sx={{ maxWidth: 1200, margin: '0 auto', height: 'calc(100vh - 150px)', display: 'flex', flexDirection: 'column' }}>
-      <Card sx={{ ...cardStyle, flex: 1, display: 'flex', flexDirection: 'column' }}>
-        <CardContent sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <Box sx={{ maxWidth: 1200, minWidth: 0, margin: '0 auto', height: 'calc(100vh - 150px)', display: 'flex', flexDirection: 'column' }}>
+      <Card sx={{ ...cardStyle, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        <CardContent sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           {/* 工具栏 */}
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, flexWrap: 'wrap', gap: 1 }}>
-            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', minWidth: 0 }}>
               <TextField
                 size="small"
-                placeholder="搜索日志..."
+                placeholder={t.logs.search}
+                inputProps={{ 'aria-label': t.logs.search }}
                 value={searchText}
                 onChange={(e) => setSearchText(e.target.value)}
                 InputProps={{
@@ -151,7 +177,8 @@ const LogsPage: React.FC = () => {
                 {['all', 'DEBUG', 'INFO', 'WARN', 'ERROR'].map((level) => (
                   <Chip
                     key={level}
-                    label={level === 'all' ? '全部' : level}
+                    label={level === 'all' ? t.logs.all : level}
+                    aria-pressed={filter === level}
                     size="small"
                     variant={filter === level ? 'filled' : 'outlined'}
                     color={filter === level ? 'primary' : 'default'}
@@ -160,7 +187,7 @@ const LogsPage: React.FC = () => {
                 ))}
               </Box>
             </Box>
-            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
               <FormControlLabel
                 control={
                   <Switch
@@ -169,19 +196,21 @@ const LogsPage: React.FC = () => {
                     onChange={(e) => setAutoScroll(e.target.checked)}
                   />
                 }
-                label="自动滚动"
+                label={t.logs.autoScroll}
               />
               <IconButton
                 size="small"
                 onClick={() => setPaused(!paused)}
-                title={paused ? '继续' : '暂停'}
+                title={paused ? t.logs.resume : t.logs.pause}
+                aria-label={paused ? t.logs.resume : t.logs.pause}
+                aria-pressed={paused}
               >
                 {paused ? <ResumeIcon /> : <PauseIcon />}
               </IconButton>
-              <IconButton size="small" onClick={handleExport} title="导出日志">
+              <IconButton size="small" onClick={handleExport} title={t.logs.export} aria-label={t.logs.export}>
                 <DownloadIcon />
               </IconButton>
-              <IconButton size="small" onClick={handleClear} title="清空日志">
+              <IconButton size="small" onClick={() => { setClearError(null); setClearDialogOpen(true); }} title={t.logs.clear} aria-label={t.logs.clear}>
                 <ClearIcon />
               </IconButton>
             </Box>
@@ -192,6 +221,7 @@ const LogsPage: React.FC = () => {
             className="log-content"
             sx={{
               flex: 1,
+              minHeight: 0,
               overflow: 'auto',
               backgroundColor: isDark ? '#1a1b26' : '#f8f9fa',
               borderRadius: 1,
@@ -206,7 +236,7 @@ const LogsPage: React.FC = () => {
           >
             {filteredLogs.length === 0 ? (
               <Typography color="textSecondary" sx={{ textAlign: 'center', py: 4, userSelect: 'none' }}>
-                暂无日志
+                {t.logs.noLogs}
               </Typography>
             ) : (
               filteredLogs.map((log) => (
@@ -224,7 +254,7 @@ const LogsPage: React.FC = () => {
                     cursor: 'text',
                   }}
                 >
-                  <span style={{ color: '#888', whiteSpace: 'nowrap', userSelect: 'text' }}>
+                  <span style={{ color: isDark ? '#888' : '#666', flexShrink: 0, whiteSpace: 'nowrap', userSelect: 'text' }}>
                     {new Date(log.timestamp).toLocaleTimeString()}
                   </span>
                   <span
@@ -232,12 +262,13 @@ const LogsPage: React.FC = () => {
                       color: getLogColor(log.level),
                       fontWeight: 600,
                       minWidth: 50,
+                      flexShrink: 0,
                       userSelect: 'text',
                     }}
                   >
                     [{log.level}]
                   </span>
-                  <span style={{ color: isDark ? '#e0e0e0' : '#333', wordBreak: 'break-all', userSelect: 'text' }}>
+                  <span style={{ color: isDark ? '#e0e0e0' : '#333', minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word', userSelect: 'text' }}>
                     {log.message}
                   </span>
                 </Box>
@@ -248,13 +279,25 @@ const LogsPage: React.FC = () => {
         </CardContent>
       </Card>
 
+      <Dialog open={clearDialogOpen} onClose={clearing ? undefined : () => setClearDialogOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>{t.logs.clearConfirmTitle}</DialogTitle>
+        <DialogContent>
+          {clearError && <Alert severity="error" sx={{ mb: 2 }}>{clearError}</Alert>}
+          <Typography>{t.logs.clearConfirm}</Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setClearDialogOpen(false)} disabled={clearing}>{t.common.cancel}</Button>
+          <Button onClick={handleClear} disabled={clearing} color="error" variant="contained" aria-busy={clearing}>{t.logs.clear}</Button>
+        </DialogActions>
+      </Dialog>
+
       <Snackbar 
         open={snackbar.open} 
         autoHideDuration={3000} 
         onClose={() => setSnackbar(prev => ({ ...prev, open: false }))}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       >
-        <Alert severity={snackbar.severity} onClose={() => setSnackbar(prev => ({ ...prev, open: false }))}>
+        <Alert severity={snackbar.severity} closeText={t.common.close} onClose={() => setSnackbar(prev => ({ ...prev, open: false }))}>
           {snackbar.message}
         </Alert>
       </Snackbar>

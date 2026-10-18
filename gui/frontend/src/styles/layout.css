@@ -41,15 +41,13 @@ a,
   cursor: pointer;
 }
 
-/* Switch 组件内部不响应文字点击 */
 .MuiFormControlLabel-root {
-  pointer-events: none;
+  margin-left: 0 !important;
   margin-right: 0 !important;
-  /* 修正右侧间距 */
+  column-gap: 8px;
 }
 
 .MuiFormControlLabel-root .MuiSwitch-root {
-  pointer-events: auto;
   cursor: pointer;
 }
 
@@ -120,6 +118,21 @@ a,
   height: 100vh;
   display: flex;
   overflow: hidden;
+}
+
+.skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 2000;
+  padding: 8px 12px;
+  background: var(--background-paper);
+  color: var(--text-primary);
+  transform: translateY(-160%);
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
 }
 
 /* macOS 标题栏拖动区域 */
@@ -197,7 +210,7 @@ a,
   margin-bottom: 4px;
   border-radius: 12px;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: background-color 0.2s ease, color 0.2s ease;
   text-decoration: none;
   color: inherit;
 }
@@ -237,6 +250,8 @@ a,
 }
 
 .layout-sidebar .nav-item .label {
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: 14px;
   font-weight: 500;
   line-height: 24px;
@@ -262,6 +277,7 @@ a,
   display: flex;
   align-items: center;
   gap: 6px;
+  overflow-wrap: anywhere;
 }
 
 .layout-sidebar .status-card .status-dot {
@@ -284,6 +300,8 @@ a,
 
 .layout-content {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -319,8 +337,18 @@ a,
 
 .layout-content .main {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-wrap: anywhere;
   overflow-y: auto;
   padding: 24px;
+}
+
+@media (max-width: 850px) {
+  .layout-sidebar { flex-basis: 180px; }
+  .layout-sidebar .nav-menu { padding-inline: 8px; }
+  .layout-sidebar .nav-item { padding-inline: 12px; }
+  .layout-content .main { padding: 16px; }
 }
 
 /* Dark mode */

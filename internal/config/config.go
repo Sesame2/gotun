@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -100,8 +101,19 @@ func parseJumpHost(jumpHost string) (user, host, port string, err error) {
 	if host == "" {
 		return "", "", "", fmt.Errorf("主机名不能为空")
 	}
+	if err := validatePort(port); err != nil {
+		return "", "", "", err
+	}
 
 	return user, host, port, nil
+}
+
+func validatePort(port string) error {
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return fmt.Errorf("无效的SSH端口: %s (应为 1-65535)", port)
+	}
+	return nil
 }
 
 // Validate 验证配置
@@ -140,6 +152,9 @@ func (c *Config) Validate() error {
 		if jh.Port == "" {
 			c.JumpHostsList[i].Port = "22"
 		}
+		if err := validatePort(c.JumpHostsList[i].Port); err != nil {
+			return fmt.Errorf("第 %d 个跳板机配置: %w", i+1, err)
+		}
 	}
 
 	return nil
@@ -165,6 +180,11 @@ func ParseSubnetAlias(alias string) (SubnetAlias, error) {
 	_, dstNet, err := net.ParseCIDR(parts[1])
 	if err != nil {
 		return SubnetAlias{}, fmt.Errorf("无效的目标CIDR: %s (%v)", parts[1], err)
+	}
+	srcPrefix, _ := srcNet.Mask.Size()
+	dstPrefix, _ := dstNet.Mask.Size()
+	if srcPrefix < dstPrefix {
+		return SubnetAlias{}, fmt.Errorf("目标网段必须容纳源网段的所有地址: %s -> %s", srcNet, dstNet)
 	}
 
 	return SubnetAlias{

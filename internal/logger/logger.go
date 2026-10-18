@@ -33,10 +33,14 @@ type Logger struct {
 
 // NewLogger 创建日志记录器
 func NewLogger(verbose bool) *Logger {
+	level := LevelInfo
+	if verbose {
+		level = LevelDebug
+	}
 	return &Logger{
 		verbose: verbose,
 		logger:  log.New(os.Stdout, "", log.LstdFlags),
-		level:   LevelInfo,
+		level:   level,
 	}
 }
 

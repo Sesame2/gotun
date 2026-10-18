@@ -157,6 +157,7 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("HTTP代理初始化失败: %w", err)
 		}
+		defer httpProxy.Close()
 
 		// 4. 初始化 SOCKS5 代理
 		var socksProxy *proxy.SOCKS5OverSSH
@@ -165,6 +166,7 @@ var rootCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("SOCKS5代理初始化失败: %w", err)
 			}
+			defer socksProxy.Close()
 		}
 
 		var proxyMgr *sysproxy.Manager
@@ -179,6 +181,7 @@ var rootCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("TUN服务初始化失败: %w", err)
 			}
+			defer tunService.Close()
 		}
 
 		sigChan := make(chan os.Signal, 1)

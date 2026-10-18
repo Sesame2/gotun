@@ -40,18 +40,19 @@ type ProxyStats struct {
 
 // ProxyService 代理服务管理
 type ProxyService struct {
-	mu         sync.RWMutex
-	cfg        *config.Config
-	logger     *logger.Logger
-	sshClient  *proxy.SSHClient
-	httpProxy  *proxy.HTTPOverSSH
-	socksProxy *proxy.SOCKS5OverSSH
-	proxyMgr   *sysproxy.Manager
-	router     *router.Router
-	status     ProxyStatus
-	startTime  time.Time
-	errMsg     string
-	requests   int64
+	lifecycleMu sync.Mutex
+	mu          sync.RWMutex
+	cfg         *config.Config
+	logger      *logger.Logger
+	sshClient   *proxy.SSHClient
+	httpProxy   *proxy.HTTPOverSSH
+	socksProxy  *proxy.SOCKS5OverSSH
+	proxyMgr    *sysproxy.Manager
+	router      *router.Router
+	status      ProxyStatus
+	startTime   time.Time
+	errMsg      string
+	requests    int64
 }
 
 // NewProxyService 创建代理服务
@@ -72,8 +73,13 @@ func (s *ProxyService) SetLogCallback(cb logger.LogCallback) {
 
 // SetConfig 设置配置
 func (s *ProxyService) SetConfig(cfg *config.Config) {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if cfg == nil || s.status == StatusRunning || s.status == StatusStarting || s.status == StatusStopping {
+		return
+	}
 	s.cfg = cfg
 }
 
@@ -131,10 +137,27 @@ func (s *ProxyService) GetStatus() ProxyStats {
 
 // Start 启动代理服务
 func (s *ProxyService) Start() error {
+	return s.start(nil)
+}
+
+// StartWithConfig selects and starts a profile within the same lifecycle lock.
+func (s *ProxyService) StartWithConfig(cfg *config.Config) error {
+	if cfg == nil {
+		return fmt.Errorf("代理配置不能为空")
+	}
+	return s.start(cfg)
+}
+
+func (s *ProxyService) start(cfg *config.Config) error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
 	s.mu.Lock()
 	if s.status == StatusRunning || s.status == StatusStarting {
 		s.mu.Unlock()
 		return fmt.Errorf("代理服务已在运行中")
+	}
+	if cfg != nil {
+		s.cfg = cfg
 	}
 	s.status = StatusStarting
 	s.errMsg = ""
@@ -161,6 +184,7 @@ func (s *ProxyService) Start() error {
 	s.logger.Infof("GoTun GUI 代理服务启动中...")
 
 	// 1. 初始化 Router
+	s.router = nil
 	if s.cfg.RuleFile != "" {
 		r, err := router.NewRouter(s.cfg.RuleFile)
 		if err != nil {
@@ -206,34 +230,34 @@ func (s *ProxyService) Start() error {
 	// 5. 系统代理管理器
 	if s.cfg.SystemProxy {
 		s.proxyMgr = sysproxy.NewManager(s.logger, s.cfg.ListenAddr, s.cfg.SocksAddr)
-	}
-
-	// 启动 HTTP 代理
-	go func() {
-		if s.cfg.SystemProxy && s.proxyMgr != nil {
-			if err := s.proxyMgr.Enable(); err != nil {
-				s.logger.Errorf("设置系统代理失败: %v", err)
-			}
+		if err := s.proxyMgr.Enable(); err != nil {
+			s.logger.Errorf("设置系统代理失败: %v", err)
 		}
-		if err := s.httpProxy.Start(); err != nil {
-			s.logger.Errorf("HTTP代理服务启动失败: %v", err)
-			s.setError(fmt.Sprintf("HTTP代理服务启动失败: %v", err))
-		}
-	}()
-
-	// 启动 SOCKS5 代理
-	if s.socksProxy != nil {
-		go func() {
-			if err := s.socksProxy.Start(); err != nil {
-				s.logger.Errorf("SOCKS5代理服务启动失败: %v", err)
-			}
-		}()
 	}
 
 	s.mu.Lock()
 	s.status = StatusRunning
 	s.startTime = time.Now()
 	s.mu.Unlock()
+
+	// 启动 HTTP 代理
+	log := s.logger
+	go func() {
+		if err := httpProxy.Start(); err != nil {
+			log.Errorf("HTTP代理服务启动失败: %v", err)
+			s.setError(fmt.Sprintf("HTTP代理服务启动失败: %v", err))
+		}
+	}()
+
+	// 启动 SOCKS5 代理
+	if socksProxy := s.socksProxy; socksProxy != nil {
+		go func() {
+			if err := socksProxy.Start(); err != nil {
+				log.Errorf("SOCKS5代理服务启动失败: %v", err)
+				s.setError(fmt.Sprintf("SOCKS5代理服务启动失败: %v", err))
+			}
+		}()
+	}
 
 	s.logger.Infof("代理服务已启动 - HTTP: %s", s.cfg.ListenAddr)
 	if s.cfg.SocksAddr != "" {
@@ -245,8 +269,10 @@ func (s *ProxyService) Start() error {
 
 // Stop 停止代理服务
 func (s *ProxyService) Stop() error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
 	s.mu.Lock()
-	if s.status != StatusRunning {
+	if s.status == StatusStopped {
 		s.mu.Unlock()
 		return nil
 	}

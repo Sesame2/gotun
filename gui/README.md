@@ -26,13 +26,13 @@ GoTun GUI 是 [GoTun](https://github.com/Sesame2/gotun) 的图形用户界面客
 
 ### 前置要求
 
-- Go 1.23 或更高版本
-- Node.js 18+ 和 npm
+- Go 1.25.5 或更高版本
+- Node.js 20+ 和 npm
 - Wails CLI v2.10.1+
 
 ```bash
 # 安装 Wails CLI
-go install github.com/wailsapp/wails/v2/cmd/wails@latest
+go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.1
 
 # 检查 Wails 环境
 wails doctor
@@ -240,14 +240,28 @@ interface ProxyStats {
 
 ## 开发计划
 
-- [ ] 支持多语言（英文）
-- [ ] 支持浅色主题
+- [x] 支持多语言（简体中文/英文）
+- [x] 支持浅色主题与跟随系统
 - [ ] 添加系统托盘图标
 - [ ] 支持开机自启动
 - [ ] 支持流量统计
 - [ ] 支持规则编辑器
-- [ ] 支持跳板机配置
+- [x] 支持跳板机配置
 - [ ] 支持配置导入/导出
+
+简体中文/英文切换已覆盖导航和四个页面、表单、提示与确认框；后端日志正文保留来源语言。自启动、托盘和自动连接字段已有配置存储，实际系统行为仍未实现。详细状态与已知风险见 [项目分析](../docs/PROJECT_ANALYSIS.md)。
+
+## 测试
+
+在项目根目录运行：
+
+```bash
+make test-all       # Go 核心、React 前端、GUI Go 模块
+make test-race      # 核心竞态检测
+make test-coverage  # 核心覆盖率
+```
+
+测试会从干净检出生成 Wails 绑定、按锁文件安装前端依赖并构建前端。网络测试使用本机临时 SSH 服务和临时配置，不修改系统代理或创建真实 TUN 设备。覆盖范围、结果与人工验证步骤见 [测试说明](../docs/TESTING.md)，原生逐按钮与样式结果见 [GUI 交互验收](../docs/GUI_INTERACTION_AUDIT.md)。
 
 ## 许可证
 

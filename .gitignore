@@ -41,6 +41,7 @@ dist/
 gui/build/
 gui/frontend/dist/
 gui/frontend/node_modules/
+gui/frontend/coverage/
 gui/wailsjs/
 gui/frontend/wailsjs/
 gui/frontend/package.json.md5

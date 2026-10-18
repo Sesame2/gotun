@@ -25,10 +25,6 @@ import {
   CircularProgress,
   Tooltip,
   Divider,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
 } from '@mui/material';
 import {
   Add as AddIcon,
@@ -44,6 +40,7 @@ import { useTheme } from '@mui/material/styles';
 import { useProfiles } from '../../hooks/useConfig';
 import { SSHProfile, ProfileFormData, TunNATRuleFormData } from '../../types';
 import { TestConnection, OpenFileDialog } from '../../../wailsjs/go/main/App';
+import { useI18n } from '../../providers/I18nProvider';
 
 const initialFormData: ProfileFormData = {
   name: '',
@@ -67,9 +64,10 @@ const initialFormData: ProfileFormData = {
 };
 
 const ProfilesPage: React.FC = () => {
+  const { t } = useI18n();
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
-  const { profiles, loading, addProfile, updateProfile, deleteProfile } = useProfiles();
+  const { profiles, loading, error, addProfile, updateProfile, deleteProfile } = useProfiles();
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogError, setDialogError] = useState<string | null>(null);
@@ -81,8 +79,11 @@ const ProfilesPage: React.FC = () => {
   const [testLoading, setTestLoading] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const handleOpenDialog = (profile?: SSHProfile) => {
+    setDialogError(null);
+    setShowPassword(false);
     if (profile) {
       setEditingProfile(profile);
       setFormData({
@@ -118,6 +119,7 @@ const ProfilesPage: React.FC = () => {
   const handleCloseDialog = () => {
     setDialogOpen(false);
     setDialogError(null);
+    setShowPassword(false);
     setEditingProfile(null);
     setFormData(initialFormData);
   };
@@ -206,27 +208,28 @@ const ProfilesPage: React.FC = () => {
 
   const handleSelectFile = async (field: 'keyFile' | 'ruleFile') => {
     try {
-      const title = field === 'keyFile' ? '选择SSH私钥文件' : '选择规则文件';
+      const title = field === 'keyFile' ? t.profiles.selectKeyFile : t.profiles.selectRuleFile;
       const path = await OpenFileDialog(title, []);
       if (path) {
         setFormData(prev => ({ ...prev, [field]: path }));
       }
     } catch (err) {
       console.error('选择文件失败:', err);
+      setDialogError(err instanceof Error ? err.message : typeof err === 'string' ? err : t.profiles.fileFailed);
     }
   };
 
   const handleSave = async () => {
-    if (!formData.name || !formData.host || !formData.user) {
-      setMessage({ type: 'error', text: '请填写必填字段' });
+    if (!formData.name.trim() || !formData.host.trim() || !formData.user.trim()) {
+      setDialogError(t.profiles.requiredFields);
       return;
     }
 
     if (formData.enableJumpHost) {
       for (let i = 0; i < formData.jumpHosts.length; i++) {
         const jh = formData.jumpHosts[i];
-        if (!jh.host || !jh.user) {
-          setMessage({ type: 'error', text: `跳板机 ${i + 1} 缺少主机或用户名` });
+        if (!jh.host.trim() || !jh.user.trim()) {
+          setDialogError(t.profiles.jumpRequired.replace('{index}', String(i + 1)));
           return;
         }
       }
@@ -239,7 +242,7 @@ const ProfilesPage: React.FC = () => {
       // 构造正确的数据结构
       // jumpHosts (legacy) 必须是字符串数组 (user@host:port 格式)
       // jumpHostsList (GUI) 是对象数组
-      const jumpHostsLegacy: string[] = formData.enableJumpHost
+      let jumpHostsLegacy: string[] = formData.enableJumpHost
         ? formData.jumpHosts.map(jh => {
           let str = jh.host;
           if (jh.port && jh.port !== '22') str += `:${jh.port}`;
@@ -247,6 +250,10 @@ const ProfilesPage: React.FC = () => {
           return str;
         })
         : [];
+      // 旧版配置没有结构化表单数据，修改其他字段时保留原有跳板链。
+      if (formData.enableJumpHost && formData.jumpHosts.length === 0 && !editingProfile?.jumpHostsList?.length) {
+        jumpHostsLegacy = editingProfile?.jumpHosts || [];
+      }
       const jumpHostsList = formData.enableJumpHost ? formData.jumpHosts : [];
 
       // 过滤空的 TUN 路由
@@ -281,29 +288,32 @@ const ProfilesPage: React.FC = () => {
           ...editingProfile,
           ...profilePayload,
         } as unknown as SSHProfile);
-        setMessage({ type: 'success', text: '配置已更新' });
+        setMessage({ type: 'success', text: t.profiles.updated });
       } else {
         await addProfile(profilePayload as any);
-        setMessage({ type: 'success', text: '配置已添加' });
+        setMessage({ type: 'success', text: t.profiles.added });
       }
       handleCloseDialog();
     } catch (err) {
-      setDialogError(err instanceof Error ? err.message : '保存失败');
+      setDialogError(err instanceof Error ? err.message : typeof err === 'string' ? err : t.profiles.saveFailed);
     } finally {
       setSaving(false);
     }
   };
 
   const handleDelete = async () => {
-    if (!deletingProfile) return;
+    if (!deletingProfile || deleting) return;
 
+    setDeleting(true);
     try {
       await deleteProfile(deletingProfile.id);
-      setMessage({ type: 'success', text: '配置已删除' });
+      setMessage({ type: 'success', text: t.profiles.deleted });
       setDeleteDialogOpen(false);
       setDeletingProfile(null);
     } catch (err) {
-      setMessage({ type: 'error', text: err instanceof Error ? err.message : '删除失败' });
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : typeof err === 'string' ? err : t.profiles.deleteFailed });
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -312,9 +322,9 @@ const ProfilesPage: React.FC = () => {
     setMessage(null);
     try {
       await TestConnection(profile.id);
-      setMessage({ type: 'success', text: `连接 ${profile.name} 测试成功` });
+      setMessage({ type: 'success', text: t.profiles.testSuccess.replace('{name}', profile.name) });
     } catch (err) {
-      setMessage({ type: 'error', text: err instanceof Error ? err.message : '连接测试失败' });
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : typeof err === 'string' ? err : t.profiles.testFailed });
     } finally {
       setTestLoading(null);
     }
@@ -327,25 +337,26 @@ const ProfilesPage: React.FC = () => {
   };
 
   return (
-    <Box sx={{ maxWidth: 1200, margin: '0 auto' }}>
+    <Box sx={{ maxWidth: 1200, width: '100%', minWidth: 0, margin: '0 auto' }}>
+      {error && <Alert severity="error" sx={{ mb: 2 }}>{t.profiles.loadFailed}: {error}</Alert>}
       {message && (
-        <Alert severity={message.type} sx={{ mb: 2 }} onClose={() => setMessage(null)}>
+        <Alert severity={message.type} closeText={t.common.close} sx={{ mb: 2 }} onClose={() => setMessage(null)}>
           {message.text}
         </Alert>
       )}
 
       <Card sx={cardStyle}>
         <CardContent>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1, mb: 2 }}>
             <Typography variant="h6" sx={{ fontWeight: 600 }}>
-              SSH配置列表
+              {t.profiles.title}
             </Typography>
             <Button
               variant="contained"
               startIcon={<AddIcon />}
               onClick={() => handleOpenDialog()}
             >
-              添加配置
+              {t.profiles.addProfile}
             </Button>
           </Box>
 
@@ -356,88 +367,94 @@ const ProfilesPage: React.FC = () => {
           ) : profiles.length === 0 ? (
             <Box sx={{ textAlign: 'center', py: 4 }}>
               <Typography variant="body1" color="textSecondary">
-                暂无配置，点击"添加配置"创建新的SSH配置
+                {t.profiles.noProfiles}
               </Typography>
             </Box>
           ) : (
-            <TableContainer component={Paper} sx={{ backgroundColor: 'transparent', boxShadow: 'none' }}>
-              <Table>
+            <TableContainer component={Paper} role="region" aria-label={t.profiles.title} tabIndex={0} sx={{ maxWidth: '100%', overflowX: 'auto', backgroundColor: 'transparent', boxShadow: 'none' }}>
+              <Table sx={{ minWidth: 760, '& th': { whiteSpace: 'nowrap' }, '& td': { overflowWrap: 'anywhere' } }}>
                 <TableHead>
                   <TableRow>
-                    <TableCell>名称</TableCell>
-                    <TableCell>服务器</TableCell>
-                    <TableCell>用户</TableCell>
-                    <TableCell>HTTP代理</TableCell>
-                    <TableCell>模式</TableCell>
-                    <TableCell align="right">操作</TableCell>
+                    <TableCell>{t.profiles.name}</TableCell>
+                    <TableCell>{t.profiles.host}</TableCell>
+                    <TableCell>{t.profiles.user}</TableCell>
+                    <TableCell>{t.profiles.httpProxy}</TableCell>
+                    <TableCell>{t.profiles.mode}</TableCell>
+                    <TableCell align="right">{t.profiles.actions}</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {profiles.map((profile) => (
                     <TableRow key={profile.id} hover>
-                      <TableCell>
-                        <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                      <TableCell sx={{ minWidth: 120 }}>
+                        <Typography variant="body2" sx={{ fontWeight: 500, maxWidth: 240, overflowWrap: 'anywhere' }}>
                           {profile.name}
                         </Typography>
                       </TableCell>
-                      <TableCell>
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}>
                         {profile.host}:{profile.port}
                       </TableCell>
-                      <TableCell>{profile.user}</TableCell>
-                      <TableCell>{profile.httpAddr}</TableCell>
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}>{profile.user}</TableCell>
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}>{profile.httpAddr}</TableCell>
                       <TableCell>
                         <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
                           {profile.tunMode ? (
                             <Chip
                               icon={<TunIcon sx={{ fontSize: '1rem !important' }} />}
-                              label={profile.tunGlobal ? 'TUN全局' : 'TUN路由'}
+                              label={profile.tunGlobal ? t.profiles.tunGlobalMode : t.profiles.tunRouteMode}
                               size="small"
                               color="primary"
                               variant="outlined"
                             />
                           ) : (
                             <Chip
-                              label="HTTP代理"
+                              label={t.profiles.httpProxy}
                               size="small"
                               color="default"
                             />
                           )}
                           {profile.systemProxy && (
                             <Chip
-                              label="系统代理"
+                              label={t.profiles.systemProxy}
                               size="small"
                               color="success"
                             />
                           )}
                         </Box>
                       </TableCell>
-                      <TableCell align="right">
-                        <Tooltip title="测试连接">
-                          <IconButton
-                            size="small"
-                            onClick={() => handleTest(profile)}
-                            disabled={testLoading === profile.id}
-                          >
-                            {testLoading === profile.id ? (
-                              <CircularProgress size={20} />
-                            ) : (
-                              <TestIcon />
-                            )}
-                          </IconButton>
+                      <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+                        <Tooltip title={t.home.testConnection}>
+                          <span style={{ display: 'inline-flex', verticalAlign: 'middle' }}>
+                            <IconButton
+                              size="small"
+                              aria-label={t.home.testConnection}
+                              onClick={() => handleTest(profile)}
+                              disabled={testLoading === profile.id}
+                            >
+                              {testLoading === profile.id ? (
+                                <CircularProgress size={20} />
+                              ) : (
+                                <TestIcon />
+                              )}
+                            </IconButton>
+                          </span>
                         </Tooltip>
-                        <Tooltip title="编辑">
+                        <Tooltip title={t.profiles.edit}>
                           <IconButton
                             size="small"
+                            aria-label={t.profiles.edit}
                             onClick={() => handleOpenDialog(profile)}
                           >
                             <EditIcon />
                           </IconButton>
                         </Tooltip>
-                        <Tooltip title="删除">
+                        <Tooltip title={t.profiles.delete}>
                           <IconButton
                             size="small"
                             color="error"
+                            aria-label={t.profiles.delete}
                             onClick={() => {
+                              setMessage(null);
                               setDeletingProfile(profile);
                               setDeleteDialogOpen(true);
                             }}
@@ -456,68 +473,68 @@ const ProfilesPage: React.FC = () => {
       </Card>
 
       {/* 添加/编辑对话框 */}
-      <Dialog open={dialogOpen} onClose={handleCloseDialog} maxWidth="sm" fullWidth>
+      <Dialog open={dialogOpen} onClose={saving ? undefined : handleCloseDialog} maxWidth="sm" fullWidth PaperProps={{ sx: { m: 2, maxHeight: 'calc(100vh - 32px)', width: 'calc(100% - 32px)' } }}>
         <DialogTitle>
-          {editingProfile ? '编辑配置' : '添加配置'}
+          {editingProfile ? t.profiles.editProfile : t.profiles.addProfile}
         </DialogTitle>
         <DialogContent>
           {dialogError && (
-            <Alert severity="error" sx={{ mb: 2, mt: 1 }} onClose={() => setDialogError(null)}>
+            <Alert severity="error" closeText={t.common.close} sx={{ mb: 2, mt: 1 }} onClose={() => setDialogError(null)}>
               {dialogError}
             </Alert>
           )}
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 2 }}>
             <TextField
-              label="配置名称"
+              label={t.profiles.name}
               fullWidth
               required
               value={formData.name}
               onChange={handleChange('name')}
-              placeholder="例如: 我的服务器"
+              placeholder={t.profiles.namePlaceholder}
               inputProps={{ autoCapitalize: 'off', autoCorrect: 'off' }}
             />
 
             <Box sx={{ display: 'flex', gap: 2 }}>
               <TextField
-                label="SSH主机"
+                label={t.profiles.sshHost}
                 fullWidth
                 required
                 value={formData.host}
                 onChange={handleChange('host')}
-                placeholder="例如: example.com"
-                sx={{ flex: 2 }}
+                placeholder={t.profiles.hostPlaceholder}
+                sx={{ flex: 2, minWidth: 0 }}
                 inputProps={{ autoCapitalize: 'off', autoCorrect: 'off' }}
               />
               <TextField
-                label="端口"
+                label={t.profiles.port}
                 value={formData.port}
                 onChange={handleChange('port')}
                 placeholder="22"
-                sx={{ flex: 1 }}
+                sx={{ flex: 1, minWidth: 0 }}
                 inputProps={{ autoCapitalize: 'off', autoCorrect: 'off' }}
               />
             </Box>
 
             <TextField
-              label="用户名"
+              label={t.profiles.user}
               fullWidth
               required
               value={formData.user}
               onChange={handleChange('user')}
-              placeholder="例如: root"
+              placeholder={t.profiles.userPlaceholder}
               inputProps={{ autoCapitalize: 'off', autoCorrect: 'off' }}
             />
 
             <TextField
-              label="密码"
+              label={t.profiles.password}
               fullWidth
               type={showPassword ? 'text' : 'password'}
               value={formData.password}
               onChange={handleChange('password')}
-              placeholder="留空则使用密钥或交互式认证"
+              placeholder={t.profiles.authHint}
               InputProps={{
                 endAdornment: (
-                  <IconButton onClick={() => setShowPassword(!showPassword)} edge="end">
+                  <IconButton aria-label={showPassword ? t.profiles.hidePassword : t.profiles.showPassword} aria-pressed={showPassword} onClick={() => setShowPassword(!showPassword)} edge="end">
                     {showPassword ? <HideIcon /> : <ViewIcon />}
                   </IconButton>
                 ),
@@ -525,14 +542,14 @@ const ProfilesPage: React.FC = () => {
             />
 
             <TextField
-              label="私钥文件路径"
+              label={t.profiles.keyFilePath}
               fullWidth
               value={formData.keyFile}
               onChange={handleChange('keyFile')}
-              placeholder="例如: ~/.ssh/id_rsa"
+              placeholder="~/.ssh/id_rsa"
               InputProps={{
                 endAdornment: (
-                  <IconButton onClick={() => handleSelectFile('keyFile')} edge="end">
+                  <IconButton aria-label={t.profiles.selectKeyFile} onClick={() => handleSelectFile('keyFile')} edge="end">
                     <FolderIcon />
                   </IconButton>
                 ),
@@ -541,18 +558,18 @@ const ProfilesPage: React.FC = () => {
 
             <Box sx={{ display: 'flex', gap: 2 }}>
               <TextField
-                label="HTTP代理地址"
+                label={t.profiles.httpAddr}
                 fullWidth
                 value={formData.httpAddr}
                 onChange={handleChange('httpAddr')}
                 placeholder=":8080"
               />
               <TextField
-                label="SOCKS5代理地址"
+                label={t.profiles.socksAddr}
                 fullWidth
                 value={formData.socksAddr}
                 onChange={handleChange('socksAddr')}
-                placeholder="留空则不启用"
+                placeholder={t.profiles.socksHint}
               />
             </Box>
 
@@ -563,18 +580,18 @@ const ProfilesPage: React.FC = () => {
                   onChange={handleChange('systemProxy')}
                 />
               }
-              label="自动设置系统代理"
+              label={t.profiles.autoSystemProxy}
             />
 
             <TextField
-              label="规则文件路径"
+              label={t.profiles.ruleFilePath}
               fullWidth
               value={formData.ruleFile}
               onChange={handleChange('ruleFile')}
-              placeholder="可选，用于自定义路由规则"
+              placeholder={t.profiles.ruleHint}
               InputProps={{
                 endAdornment: (
-                  <IconButton onClick={() => handleSelectFile('ruleFile')} edge="end">
+                  <IconButton aria-label={t.profiles.selectRuleFile} onClick={() => handleSelectFile('ruleFile')} edge="end">
                     <FolderIcon />
                   </IconButton>
                 ),
@@ -590,7 +607,7 @@ const ProfilesPage: React.FC = () => {
                       onChange={(e) => handleToggleJumpHost(e.target.checked)}
                     />
                   }
-                  label="启用跳板机"
+                  label={t.profiles.enableJumpHost}
                 />
               </Box>
 
@@ -599,33 +616,33 @@ const ProfilesPage: React.FC = () => {
                   {formData.jumpHosts.map((jh, index) => (
                     <Box key={index} sx={{ mt: 1 }}>
                       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-                        <Typography variant="subtitle2" color="primary">跳板机 {index + 1}</Typography>
-                        <IconButton size="small" color="error" onClick={() => handleRemoveJumpHost(index)}>
+                        <Typography variant="subtitle2" color="primary">{t.profiles.jumpHostNumber.replace('{index}', String(index + 1))}</Typography>
+                        <IconButton size="small" color="error" aria-label={t.profiles.removeJumpHost.replace('{index}', String(index + 1))} onClick={() => handleRemoveJumpHost(index)}>
                           <DeleteIcon fontSize="small" />
                         </IconButton>
                       </Box>
                       <Box sx={{ display: 'flex', gap: 2, mb: 1 }}>
                         <TextField
-                          label="主机地址"
+                          label={t.profiles.host}
                           size="small"
                           fullWidth
                           value={jh.host}
                           onChange={(e) => handleJumpHostChange(index, 'host', e.target.value)}
-                          sx={{ flex: 2 }}
+                          sx={{ flex: 2, minWidth: 0 }}
                           inputProps={{ autoCapitalize: 'off', autoCorrect: 'off' }}
                         />
                         <TextField
-                          label="端口"
+                          label={t.profiles.port}
                           size="small"
                           value={jh.port}
                           onChange={(e) => handleJumpHostChange(index, 'port', e.target.value)}
-                          sx={{ flex: 1 }}
+                          sx={{ flex: 1, minWidth: 0 }}
                           inputProps={{ autoCapitalize: 'off', autoCorrect: 'off' }}
                         />
                       </Box>
                       <Box sx={{ display: 'flex', gap: 2 }}>
                         <TextField
-                          label="用户名"
+                          label={t.profiles.user}
                           size="small"
                           fullWidth
                           value={jh.user}
@@ -633,13 +650,13 @@ const ProfilesPage: React.FC = () => {
                           inputProps={{ autoCapitalize: 'off', autoCorrect: 'off' }}
                         />
                         <TextField
-                          label="密码"
+                          label={t.profiles.password}
                           size="small"
                           fullWidth
                           type="password"
                           value={jh.password || ''}
                           onChange={(e) => handleJumpHostChange(index, 'password', e.target.value)}
-                          placeholder="如果不填则使用私钥"
+                          placeholder={t.profiles.jumpPasswordHint}
                           inputProps={{ autoCapitalize: 'off', autoCorrect: 'off' }}
                         />
                       </Box>
@@ -652,7 +669,7 @@ const ProfilesPage: React.FC = () => {
                     onClick={handleAddJumpHost}
                     sx={{ alignSelf: 'flex-start', mt: 1 }}
                   >
-                    增加跳板机
+                    {t.profiles.addJumpHost}
                   </Button>
                 </Box>
               )}
@@ -672,7 +689,7 @@ const ProfilesPage: React.FC = () => {
                   label={
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                       <TunIcon fontSize="small" />
-                      <span>启用 TUN 模式 (VPN)</span>
+                      <span>{t.profiles.enableTun}</span>
                     </Box>
                   }
                 />
@@ -681,7 +698,7 @@ const ProfilesPage: React.FC = () => {
               {formData.tunMode && (
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pl: 2, borderLeft: '2px solid', borderColor: 'primary.main' }}>
                   <Alert severity="info" sx={{ mb: 1 }}>
-                    TUN 模式需要管理员权限，启动时会自动请求提权
+                    {t.profiles.tunPrivilegeHint}
                   </Alert>
 
                   <FormControlLabel
@@ -691,17 +708,17 @@ const ProfilesPage: React.FC = () => {
                         onChange={handleChange('tunGlobal')}
                       />
                     }
-                    label="全局模式 (代理所有流量)"
+                    label={t.profiles.tunGlobal}
                   />
 
                   <TextField
-                    label="TUN 设备 CIDR"
+                    label={t.profiles.tunCIDR}
                     fullWidth
                     size="small"
                     value={formData.tunCIDR}
                     onChange={handleChange('tunCIDR')}
                     placeholder="10.0.0.1/24"
-                    helperText="TUN 虚拟网卡的 IP 地址"
+                    helperText={t.profiles.tunCIDRHint}
                     inputProps={{ autoCapitalize: 'off', autoCorrect: 'off' }}
                   />
 
@@ -709,7 +726,7 @@ const ProfilesPage: React.FC = () => {
                   {!formData.tunGlobal && (
                     <Box>
                       <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                        静态路由 (仅路由指定网段)
+                        {t.profiles.tunRoutes}
                       </Typography>
                       {formData.tunRoutes.map((route, index) => (
                         <Box key={index} sx={{ display: 'flex', gap: 1, mb: 1 }}>
@@ -718,10 +735,10 @@ const ProfilesPage: React.FC = () => {
                             fullWidth
                             value={route}
                             onChange={(e) => handleTunRouteChange(index, e.target.value)}
-                            placeholder="例如: 192.168.1.0/24"
-                            inputProps={{ autoCapitalize: 'off', autoCorrect: 'off' }}
+                            placeholder={t.profiles.routePlaceholder}
+                            inputProps={{ 'aria-label': t.profiles.routeLabel.replace('{index}', String(index + 1)), autoCapitalize: 'off', autoCorrect: 'off' }}
                           />
-                          <IconButton size="small" color="error" onClick={() => handleRemoveTunRoute(index)}>
+                          <IconButton size="small" color="error" aria-label={t.profiles.removeRoute.replace('{index}', String(index + 1))} onClick={() => handleRemoveTunRoute(index)}>
                             <DeleteIcon fontSize="small" />
                           </IconButton>
                         </Box>
@@ -733,7 +750,7 @@ const ProfilesPage: React.FC = () => {
                         onClick={handleAddTunRoute}
                         sx={{ mt: 1 }}
                       >
-                        添加路由
+                        {t.profiles.addRoute}
                       </Button>
                     </Box>
                   )}
@@ -741,28 +758,28 @@ const ProfilesPage: React.FC = () => {
                   {/* NAT 映射配置 */}
                   <Box>
                     <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                      NAT 映射 (解决网段冲突)
+                      {t.profiles.tunNAT}
                     </Typography>
                     {formData.tunNAT.map((nat, index) => (
                       <Box key={index} sx={{ display: 'flex', gap: 1, mb: 1, alignItems: 'center' }}>
                         <TextField
                           size="small"
-                          sx={{ flex: 1 }}
+                          sx={{ flex: 1, minWidth: 0 }}
                           value={nat.srcCIDR}
                           onChange={(e) => handleTunNATChange(index, 'srcCIDR', e.target.value)}
-                          placeholder="本地 CIDR (如 10.0.0.0/24)"
-                          inputProps={{ autoCapitalize: 'off', autoCorrect: 'off' }}
+                          placeholder={t.profiles.natLocal}
+                          inputProps={{ 'aria-label': `${t.profiles.natLocal} ${index + 1}`, autoCapitalize: 'off', autoCorrect: 'off' }}
                         />
                         <Typography variant="body2" sx={{ mx: 1 }}>→</Typography>
                         <TextField
                           size="small"
-                          sx={{ flex: 1 }}
+                          sx={{ flex: 1, minWidth: 0 }}
                           value={nat.dstCIDR}
                           onChange={(e) => handleTunNATChange(index, 'dstCIDR', e.target.value)}
-                          placeholder="远程 CIDR (如 192.168.0.0/24)"
-                          inputProps={{ autoCapitalize: 'off', autoCorrect: 'off' }}
+                          placeholder={t.profiles.natRemote}
+                          inputProps={{ 'aria-label': `${t.profiles.natRemote} ${index + 1}`, autoCapitalize: 'off', autoCorrect: 'off' }}
                         />
-                        <IconButton size="small" color="error" onClick={() => handleRemoveTunNAT(index)}>
+                        <IconButton size="small" color="error" aria-label={t.profiles.removeNAT.replace('{index}', String(index + 1))} onClick={() => handleRemoveTunNAT(index)}>
                           <DeleteIcon fontSize="small" />
                         </IconButton>
                       </Box>
@@ -774,7 +791,7 @@ const ProfilesPage: React.FC = () => {
                       onClick={handleAddTunNAT}
                       sx={{ mt: 1 }}
                     >
-                      添加 NAT 规则
+                      {t.profiles.addNAT}
                     </Button>
                   </Box>
                 </Box>
@@ -783,29 +800,32 @@ const ProfilesPage: React.FC = () => {
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleCloseDialog}>取消</Button>
+          <Button onClick={handleCloseDialog} disabled={saving}>{t.common.cancel}</Button>
           <Button
             variant="contained"
             onClick={handleSave}
             disabled={saving}
+            aria-label={t.common.save}
+            aria-busy={saving}
           >
-            {saving ? <CircularProgress size={24} /> : '保存'}
+            {saving ? <CircularProgress size={24} /> : t.common.save}
           </Button>
         </DialogActions>
       </Dialog>
 
       {/* 删除确认对话框 */}
-      <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)}>
-        <DialogTitle>确认删除</DialogTitle>
+      <Dialog open={deleteDialogOpen} onClose={deleting ? undefined : () => setDeleteDialogOpen(false)}>
+        <DialogTitle>{t.profiles.deleteProfile}</DialogTitle>
         <DialogContent>
+          {message?.type === 'error' && <Alert severity="error" sx={{ mb: 2 }}>{message.text}</Alert>}
           <Typography>
-            确定要删除配置 "{deletingProfile?.name}" 吗？此操作无法撤销。
+            {t.profiles.deleteConfirm.replace('{name}', deletingProfile?.name || '')}
           </Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDeleteDialogOpen(false)}>取消</Button>
-          <Button variant="contained" color="error" onClick={handleDelete}>
-            删除
+          <Button onClick={() => setDeleteDialogOpen(false)} disabled={deleting}>{t.common.cancel}</Button>
+          <Button variant="contained" color="error" onClick={handleDelete} disabled={deleting}>
+            {t.common.delete}
           </Button>
         </DialogActions>
       </Dialog>
