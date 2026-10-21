@@ -14,12 +14,10 @@ import {
   Snackbar,
   Alert,
 } from '@mui/material';
-import {
-  FolderOpen as FolderIcon,
-  Info as InfoIcon,
-  GitHub as GitHubIcon,
-  BugReport as BugIcon,
-} from '@mui/icons-material';
+import FolderIcon from '@mui/icons-material/FolderOpen';
+import InfoIcon from '@mui/icons-material/Info';
+import GitHubIcon from '@mui/icons-material/GitHub';
+import BugIcon from '@mui/icons-material/BugReport';
 import { useTheme } from '@mui/material/styles';
 import { useThemeMode } from '../../providers/ThemeProvider';
 import { useI18n } from '../../providers/I18nProvider';

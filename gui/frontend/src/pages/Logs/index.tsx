@@ -17,13 +17,11 @@ import {
   DialogContent,
   DialogActions,
 } from '@mui/material';
-import {
-  Delete as ClearIcon,
-  Download as DownloadIcon,
-  Pause as PauseIcon,
-  PlayArrow as ResumeIcon,
-  Search as SearchIcon,
-} from '@mui/icons-material';
+import ClearIcon from '@mui/icons-material/Delete';
+import DownloadIcon from '@mui/icons-material/Download';
+import PauseIcon from '@mui/icons-material/Pause';
+import ResumeIcon from '@mui/icons-material/PlayArrow';
+import SearchIcon from '@mui/icons-material/Search';
 import { useTheme } from '@mui/material/styles';
 import { GetLogs, ClearLogs, SaveFileDialog, SaveLogsToFile } from '../../../wailsjs/go/main/App';
 import { EventsOn, EventsOff } from '../../../wailsjs/runtime/runtime';

@@ -26,16 +26,14 @@ import {
   Tooltip,
   Divider,
 } from '@mui/material';
-import {
-  Add as AddIcon,
-  Edit as EditIcon,
-  Delete as DeleteIcon,
-  PlayArrow as TestIcon,
-  Visibility as ViewIcon,
-  VisibilityOff as HideIcon,
-  FolderOpen as FolderIcon,
-  Router as TunIcon,
-} from '@mui/icons-material';
+import AddIcon from '@mui/icons-material/Add';
+import EditIcon from '@mui/icons-material/Edit';
+import DeleteIcon from '@mui/icons-material/Delete';
+import TestIcon from '@mui/icons-material/PlayArrow';
+import ViewIcon from '@mui/icons-material/Visibility';
+import HideIcon from '@mui/icons-material/VisibilityOff';
+import FolderIcon from '@mui/icons-material/FolderOpen';
+import TunIcon from '@mui/icons-material/Router';
 import { useTheme } from '@mui/material/styles';
 import { useProfiles } from '../../hooks/useConfig';
 import { SSHProfile, ProfileFormData, TunNATRuleFormData } from '../../types';

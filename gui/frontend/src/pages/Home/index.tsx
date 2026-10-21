@@ -26,19 +26,17 @@ import {
   Tabs,
   Tab,
 } from '@mui/material';
-import {
-  PlayArrow as PlayIcon,
-  Stop as StopIcon,
-  Refresh as RefreshIcon,
-  CheckCircle as SuccessIcon,
-  Error as ErrorIcon,
-  Schedule as ClockIcon,
-  Router as RouterIcon,
-  VpnKey as VpnIcon,
-  AdminPanelSettings as AdminIcon,
-  Lan as TunIcon,
-  Public as GlobalIcon,
-} from '@mui/icons-material';
+import PlayIcon from '@mui/icons-material/PlayArrow';
+import StopIcon from '@mui/icons-material/Stop';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import SuccessIcon from '@mui/icons-material/CheckCircle';
+import ErrorIcon from '@mui/icons-material/Error';
+import ClockIcon from '@mui/icons-material/Schedule';
+import RouterIcon from '@mui/icons-material/Router';
+import VpnIcon from '@mui/icons-material/VpnKey';
+import AdminIcon from '@mui/icons-material/AdminPanelSettings';
+import TunIcon from '@mui/icons-material/Lan';
+import GlobalIcon from '@mui/icons-material/Public';
 import { useTheme } from '@mui/material/styles';
 import { useI18n } from '../../providers/I18nProvider';
 import { useProxyStatus } from '../../hooks/useProxyStatus';

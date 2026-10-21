@@ -1,11 +1,9 @@
 import React from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import {
-  Home as HomeIcon,
-  Settings as SettingsIcon,
-  ListAlt as LogsIcon,
-  Dns as ProfilesIcon,
-} from '@mui/icons-material';
+import HomeIcon from '@mui/icons-material/Home';
+import SettingsIcon from '@mui/icons-material/Settings';
+import LogsIcon from '@mui/icons-material/ListAlt';
+import ProfilesIcon from '@mui/icons-material/Dns';
 import { useTheme } from '@mui/material/styles';
 import { useProxyStatus } from '../../hooks/useProxyStatus';
 import { useI18n } from '../../providers/I18nProvider';
