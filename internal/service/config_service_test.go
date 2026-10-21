@@ -406,3 +406,30 @@ func TestConfigConcurrentReadersAndWriters(t *testing.T) {
 		}
 	}
 }
+
+func TestSystemProxyModeValidationAndPersistence(t *testing.T) {
+	svc := newTestConfigService(t)
+	for _, mode := range []string{"", "follow-profile", "auto", "manual"} {
+		settings := svc.GetSettings()
+		settings.SystemProxyMode = mode
+		if err := svc.UpdateSettings(settings); err != nil {
+			t.Fatal(err)
+		}
+		reloaded, err := NewConfigService()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reloaded.GetSettings().SystemProxyMode != mode {
+			t.Fatalf("mode %q not persisted", mode)
+		}
+	}
+	previous := svc.GetSettings()
+	invalid := previous
+	invalid.SystemProxyMode = "invalid"
+	if svc.UpdateSettings(invalid) == nil {
+		t.Fatal("invalid mode accepted")
+	}
+	if svc.GetSettings() != previous {
+		t.Fatal("invalid mode mutated settings")
+	}
+}

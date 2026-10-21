@@ -24,7 +24,7 @@ jobs:
           cache-dependency-path: go.sum
       - name: Check formatting
         if: runner.os == 'Linux'
-        run: test -z "$(gofmt -l cmd internal gui/*.go)"
+        run: test -z "$(gofmt -l cmd internal gui/*.go gui/internal)"
       - name: Vet
         run: go vet ./cmd/... ./internal/...
       - name: Test with race detection
@@ -33,7 +33,11 @@ jobs:
         run: go build ./cmd/gotun
 
   gui:
-    runs-on: macos-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

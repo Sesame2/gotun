@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -25,6 +26,7 @@ const (
 
 // ProxyStats 代理统计信息
 type ProxyStats struct {
+	ProfileID     string      `json:"profileId,omitempty"`
 	Status        ProxyStatus `json:"status"`
 	HTTPAddr      string      `json:"httpAddr"`
 	SocksAddr     string      `json:"socksAddr,omitempty"`
@@ -38,26 +40,37 @@ type ProxyStats struct {
 	TotalRequests int64       `json:"totalRequests"`
 }
 
+type systemProxyManager interface {
+	Enable() error
+	Disable() error
+	Clear() error
+	IsEnabled() bool
+}
+
 // ProxyService 代理服务管理
 type ProxyService struct {
-	lifecycleMu sync.Mutex
-	mu          sync.RWMutex
-	cfg         *config.Config
-	logger      *logger.Logger
-	sshClient   *proxy.SSHClient
-	httpProxy   *proxy.HTTPOverSSH
-	socksProxy  *proxy.SOCKS5OverSSH
-	proxyMgr    *sysproxy.Manager
-	router      *router.Router
-	status      ProxyStatus
-	startTime   time.Time
-	errMsg      string
-	requests    int64
+	newSystemProxy func(*logger.Logger, string, string) systemProxyManager
+	lifecycleMu    sync.Mutex
+	mu             sync.RWMutex
+	cfg            *config.Config
+	logger         *logger.Logger
+	sshClient      *proxy.SSHClient
+	httpProxy      *proxy.HTTPOverSSH
+	socksProxy     *proxy.SOCKS5OverSSH
+	proxyMgr       systemProxyManager
+	router         *router.Router
+	status         ProxyStatus
+	startTime      time.Time
+	errMsg         string
+	requests       int64
 }
 
 // NewProxyService 创建代理服务
 func NewProxyService() *ProxyService {
 	return &ProxyService{
+		newSystemProxy: func(log *logger.Logger, httpAddr, socksAddr string) systemProxyManager {
+			return sysproxy.NewManager(log, httpAddr, socksAddr)
+		},
 		cfg:    config.NewConfig(),
 		logger: logger.NewLogger(false),
 		status: StatusStopped,
@@ -122,7 +135,7 @@ func (s *ProxyService) GetStatus() ProxyStats {
 		SSHServer:     s.cfg.SSHServer,
 		SSHUser:       s.cfg.SSHUser,
 		JumpHosts:     s.cfg.JumpHosts,
-		SystemProxy:   s.cfg.SystemProxy,
+		SystemProxy:   s.proxyMgr != nil && s.proxyMgr.IsEnabled(),
 		ErrorMessage:  s.errMsg,
 		TotalRequests: s.requests,
 	}
@@ -156,6 +169,17 @@ func (s *ProxyService) start(cfg *config.Config) error {
 		s.mu.Unlock()
 		return fmt.Errorf("代理服务已在运行中")
 	}
+	pending := s.proxyMgr
+	s.mu.Unlock()
+	// Preserve tracking until cleanup of the previous OS integration succeeds.
+	if pending != nil && pending.IsEnabled() {
+		if err := pending.Disable(); err != nil {
+			failure := fmt.Errorf("清理上次系统代理失败: %w", err)
+			s.setError(failure.Error())
+			return failure
+		}
+	}
+	s.mu.Lock()
 	if cfg != nil {
 		s.cfg = cfg
 	}
@@ -228,10 +252,30 @@ func (s *ProxyService) start(cfg *config.Config) error {
 	}
 
 	// 5. 系统代理管理器
+	s.mu.Lock()
+	s.proxyMgr = s.newSystemProxy(s.logger, s.cfg.ListenAddr, s.cfg.SocksAddr)
+	mgr := s.proxyMgr
+	s.mu.Unlock()
 	if s.cfg.SystemProxy {
-		s.proxyMgr = sysproxy.NewManager(s.logger, s.cfg.ListenAddr, s.cfg.SocksAddr)
-		if err := s.proxyMgr.Enable(); err != nil {
-			s.logger.Errorf("设置系统代理失败: %v", err)
+		if err := mgr.Enable(); err != nil {
+			failure := fmt.Errorf("设置系统代理失败: %w", err)
+			if mgr.IsEnabled() {
+				failure = errors.Join(failure, mgr.Disable())
+			}
+			if s.httpProxy != nil {
+				failure = errors.Join(failure, s.httpProxy.Close())
+				s.httpProxy = nil
+			}
+			if s.socksProxy != nil {
+				failure = errors.Join(failure, s.socksProxy.Close())
+				s.socksProxy = nil
+			}
+			if s.sshClient != nil {
+				failure = errors.Join(failure, s.sshClient.Close())
+				s.sshClient = nil
+			}
+			s.setError(failure.Error())
+			return failure
 		}
 	}
 
@@ -272,7 +316,7 @@ func (s *ProxyService) Stop() error {
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
 	s.mu.Lock()
-	if s.status == StatusStopped {
+	if s.status == StatusStopped && (s.proxyMgr == nil || !s.proxyMgr.IsEnabled()) {
 		s.mu.Unlock()
 		return nil
 	}
@@ -282,9 +326,11 @@ func (s *ProxyService) Stop() error {
 	s.logger.Info("正在停止代理服务...")
 
 	// 恢复系统代理
-	if s.cfg.SystemProxy && s.proxyMgr != nil {
+	var proxyErr error
+	if s.proxyMgr != nil {
 		if err := s.proxyMgr.Disable(); err != nil {
 			s.logger.Errorf("恢复系统代理设置失败: %v", err)
+			proxyErr = err
 		}
 	}
 
@@ -316,7 +362,7 @@ func (s *ProxyService) Stop() error {
 	s.mu.Unlock()
 
 	s.logger.Info("代理服务已停止")
-	return nil
+	return proxyErr
 }
 
 // Restart 重启代理服务
@@ -361,4 +407,41 @@ func (s *ProxyService) IsRunning() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.status == StatusRunning
+}
+
+// SetSystemProxy changes the running HTTP proxy's integration without restarting SSH.
+func (s *ProxyService) SetSystemProxy(enabled bool) error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	s.mu.Lock()
+	if enabled && s.status != StatusRunning {
+		s.mu.Unlock()
+		return fmt.Errorf("代理服务尚未运行")
+	}
+	if s.proxyMgr == nil {
+		if !enabled {
+			s.mu.Unlock()
+			return nil
+		}
+		s.proxyMgr = s.newSystemProxy(s.logger, s.cfg.ListenAddr, s.cfg.SocksAddr)
+	}
+	mgr := s.proxyMgr
+	s.mu.Unlock()
+	if enabled {
+		return mgr.Enable()
+	}
+	return mgr.Disable()
+}
+
+// ClearSystemProxy clears lingering OS proxy settings independently of the tunnel lifecycle.
+func (s *ProxyService) ClearSystemProxy() error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	s.mu.Lock()
+	if s.proxyMgr == nil {
+		s.proxyMgr = s.newSystemProxy(s.logger, s.cfg.ListenAddr, s.cfg.SocksAddr)
+	}
+	mgr := s.proxyMgr
+	s.mu.Unlock()
+	return mgr.Clear()
 }

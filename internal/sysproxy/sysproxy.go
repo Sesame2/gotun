@@ -1,19 +1,23 @@
 package sysproxy
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"runtime"
-	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/Sesame2/gotun/internal/logger"
 )
 
 // Manager 管理系统代理设置
 type Manager struct {
+	mu           sync.Mutex
+	platform     string
+	run          func(string, ...string) ([]byte, error)
 	logger       *logger.Logger
 	httpAddr     string
 	socksAddr    string
@@ -51,6 +55,8 @@ func NewManager(log *logger.Logger, httpListenAddr, socksListenAddr string) *Man
 
 	return &Manager{
 		logger:       log,
+		platform:     runtime.GOOS,
+		run:          func(name string, args ...string) ([]byte, error) { return exec.Command(name, args...).CombinedOutput() },
 		httpAddr:     httpAddr,
 		socksAddr:    finalSocksAddr,
 		origSettings: make(map[string]string),
@@ -59,6 +65,8 @@ func NewManager(log *logger.Logger, httpListenAddr, socksListenAddr string) *Man
 
 // Enable 启用系统代理
 func (m *Manager) Enable() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.enabled {
 		return nil // 已经启用，无需重复操作
 	}
@@ -70,7 +78,7 @@ func (m *Manager) Enable() error {
 
 	// 根据操作系统设置代理
 	var err error
-	switch runtime.GOOS {
+	switch m.platform {
 	case "darwin":
 		err = m.enableMacOS()
 	case "windows":
@@ -78,11 +86,12 @@ func (m *Manager) Enable() error {
 	case "linux":
 		err = m.enableLinux()
 	default:
-		return fmt.Errorf("不支持的操作系统: %s", runtime.GOOS)
+		return fmt.Errorf("不支持的操作系统: %s", m.platform)
 	}
 
 	if err != nil {
-		return err
+		m.enabled = true // A failed command may leave partially applied settings.
+		return errors.Join(err, m.clear())
 	}
 
 	m.enabled = true
@@ -95,13 +104,26 @@ func (m *Manager) Enable() error {
 
 // Disable 禁用系统代理
 func (m *Manager) Disable() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if !m.enabled {
 		return nil // 已经禁用，无需操作
 	}
 
+	return m.clear()
+}
+
+// Clear explicitly disables lingering system proxy settings, even when not enabled by this manager.
+func (m *Manager) Clear() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.clear()
+}
+
+func (m *Manager) clear() error {
 	// 根据操作系统恢复设置
 	var err error
-	switch runtime.GOOS {
+	switch m.platform {
 	case "darwin":
 		err = m.disableMacOS()
 	case "windows":
@@ -109,7 +131,7 @@ func (m *Manager) Disable() error {
 	case "linux":
 		err = m.disableLinux()
 	default:
-		return fmt.Errorf("不支持的操作系统: %s", runtime.GOOS)
+		return fmt.Errorf("不支持的操作系统: %s", m.platform)
 	}
 
 	if err != nil {
@@ -123,12 +145,14 @@ func (m *Manager) Disable() error {
 
 // IsEnabled 返回代理是否已启用
 func (m *Manager) IsEnabled() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.enabled
 }
 
 // saveCurrentSettings 保存当前的代理设置
 func (m *Manager) saveCurrentSettings() error {
-	switch runtime.GOOS {
+	switch m.platform {
 	case "darwin":
 		return m.saveSettingsMacOS()
 	case "windows":
@@ -136,7 +160,7 @@ func (m *Manager) saveCurrentSettings() error {
 	case "linux":
 		return m.saveSettingsLinux()
 	default:
-		return fmt.Errorf("不支持的操作系统: %s", runtime.GOOS)
+		return fmt.Errorf("不支持的操作系统: %s", m.platform)
 	}
 }
 
@@ -146,28 +170,28 @@ func (m *Manager) saveSettingsMacOS() error {
 	m.logger.Debug("保存MacOS代理设置...")
 
 	// 获取网络服务列表
-	services, err := getMacOSNetworkServices()
+	services, err := m.getMacOSNetworkServices()
 	if err != nil {
 		return fmt.Errorf("获取网络服务列表失败: %v", err)
 	}
 
 	for _, service := range services {
 		// 获取HTTP代理设置
-		cmd := exec.Command("networksetup", "-getwebproxy", service)
+		cmd := m.command("networksetup", "-getwebproxy", service)
 		output, err := cmd.CombinedOutput()
 		if err == nil {
 			m.origSettings["http_"+service] = string(output)
 		}
 
 		// 获取HTTPS代理设置
-		cmd = exec.Command("networksetup", "-getsecurewebproxy", service)
+		cmd = m.command("networksetup", "-getsecurewebproxy", service)
 		output, err = cmd.CombinedOutput()
 		if err == nil {
 			m.origSettings["https_"+service] = string(output)
 		}
 
 		// 获取代理例外列表
-		cmd = exec.Command("networksetup", "-getproxybypassdomains", service)
+		cmd = m.command("networksetup", "-getproxybypassdomains", service)
 		output, err = cmd.CombinedOutput()
 		if err == nil {
 			m.origSettings["bypass_"+service] = string(output)
@@ -178,92 +202,52 @@ func (m *Manager) saveSettingsMacOS() error {
 }
 
 func (m *Manager) enableMacOS() error {
-	m.logger.Debug("设置MacOS系统代理...")
-
-	host, portStr, _ := net.SplitHostPort(m.httpAddr)
-	port, _ := strconv.Atoi(portStr)
-
-	// 获取网络服务列表
-	services, err := getMacOSNetworkServices()
+	services, err := m.getMacOSNetworkServices()
 	if err != nil {
-		return fmt.Errorf("获取网络服务列表失败: %v", err)
+		return err
 	}
-
+	host, port, _ := net.SplitHostPort(m.httpAddr)
+	var failures []error
 	for _, service := range services {
-		m.logger.Debugf("配置网络服务: %s", service)
-
-		// 清空代理例外列表 (使用"Empty"关键字)
-		cmd := exec.Command("networksetup", "-setproxybypassdomains", service, "Empty")
-		if err := cmd.Run(); err != nil {
-			m.logger.Warnf("清空代理例外列表失败: %v", err)
+		commands := [][]string{
+			{"-setproxybypassdomains", service, "Empty"},
+			{"-setwebproxy", service, host, port},
+			{"-setsecurewebproxy", service, host, port},
+			{"-setwebproxystate", service, "on"},
+			{"-setsecurewebproxystate", service, "on"},
 		}
-
-		// 设置HTTP代理
-		cmd = exec.Command("networksetup", "-setwebproxy", service, host, portStr)
-		if err := cmd.Run(); err != nil {
-			m.logger.Warnf("为服务 %s 设置HTTP代理失败: %v", service, err)
-			continue
-		}
-
-		// 设置HTTPS代理
-		cmd = exec.Command("networksetup", "-setsecurewebproxy", service, host, fmt.Sprintf("%d", port))
-		if err := cmd.Run(); err != nil {
-			m.logger.Warnf("为服务 %s 设置HTTPS代理失败: %v", service, err)
-			continue
-		}
-
-		// 设置SOCKS代理
 		if m.socksAddr != "" {
-			shost, sportStr, _ := net.SplitHostPort(m.socksAddr)
-			cmd = exec.Command("networksetup", "-setsocksfirewallproxy", service, shost, sportStr)
-			if err := cmd.Run(); err != nil {
-				m.logger.Warnf("为服务 %s 设置SOCKS代理失败: %v", service, err)
-			} else {
-				cmd = exec.Command("networksetup", "-setsocksfirewallproxystate", service, "on")
-				cmd.Run()
+			shost, sport, _ := net.SplitHostPort(m.socksAddr)
+			commands = append(commands, []string{"-setsocksfirewallproxy", service, shost, sport}, []string{"-setsocksfirewallproxystate", service, "on"})
+		}
+		for _, args := range commands {
+			if _, err := m.run("networksetup", args...); err != nil {
+				failures = append(failures, fmt.Errorf("%s %s: %w", service, args[0], err))
 			}
 		}
-
-		// 启用代理
-		cmd = exec.Command("networksetup", "-setwebproxystate", service, "on")
-		cmd.Run()
-
-		cmd = exec.Command("networksetup", "-setsecurewebproxystate", service, "on")
-		cmd.Run()
 	}
-
-	return nil
+	return errors.Join(failures...)
 }
 
 func (m *Manager) disableMacOS() error {
-	m.logger.Debug("恢复MacOS系统代理设置...")
-
-	// 获取网络服务列表
-	services, err := getMacOSNetworkServices()
+	services, err := m.getMacOSNetworkServices()
 	if err != nil {
-		return fmt.Errorf("获取网络服务列表失败: %v", err)
+		return err
 	}
-
+	var failures []error
 	for _, service := range services {
-		// 禁用HTTP代理
-		cmd := exec.Command("networksetup", "-setwebproxystate", service, "off")
-		cmd.Run()
-
-		// 禁用HTTPS代理
-		cmd = exec.Command("networksetup", "-setsecurewebproxystate", service, "off")
-		cmd.Run()
-
-		// 禁用SOCKS代理
-		cmd = exec.Command("networksetup", "-setsocksfirewallproxystate", service, "off")
-		cmd.Run()
+		for _, flag := range []string{"-setwebproxystate", "-setsecurewebproxystate", "-setsocksfirewallproxystate"} {
+			if _, err := m.run("networksetup", flag, service, "off"); err != nil {
+				failures = append(failures, fmt.Errorf("%s %s: %w", service, flag, err))
+			}
+		}
 	}
-
-	return nil
+	return errors.Join(failures...)
 }
 
 // 获取MacOS网络服务列表
-func getMacOSNetworkServices() ([]string, error) {
-	cmd := exec.Command("networksetup", "-listallnetworkservices")
+func (m *Manager) getMacOSNetworkServices() ([]string, error) {
+	cmd := m.command("networksetup", "-listallnetworkservices")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("获取网络服务列表失败: %v", err)
@@ -289,20 +273,20 @@ func (m *Manager) saveSettingsWindows() error {
 	m.logger.Debug("保存Windows代理设置...")
 
 	// 获取当前的代理设置
-	cmd := exec.Command("reg", "query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyEnable")
+	cmd := m.command("reg", "query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyEnable")
 	output, err := cmd.CombinedOutput()
 	if err == nil {
 		m.origSettings["enable"] = string(output)
 	}
 
-	cmd = exec.Command("reg", "query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyServer")
+	cmd = m.command("reg", "query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyServer")
 	output, err = cmd.CombinedOutput()
 	if err == nil {
 		m.origSettings["server"] = string(output)
 	}
 
 	// 获取代理例外列表
-	cmd = exec.Command("reg", "query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyOverride")
+	cmd = m.command("reg", "query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyOverride")
 	output, err = cmd.CombinedOutput()
 	if err == nil {
 		m.origSettings["override"] = string(output)
@@ -321,59 +305,59 @@ func (m *Manager) enableWindows() error {
 		proxyStr += fmt.Sprintf(";socks=%s", m.socksAddr)
 	}
 
-	cmd := exec.Command("reg", "add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyServer", "/t", "REG_SZ", "/d", proxyStr, "/f")
+	cmd := m.command("reg", "add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyServer", "/t", "REG_SZ", "/d", proxyStr, "/f")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("设置代理服务器失败: %v", err)
 	}
 
 	// 清空代理例外列表 (ProxyOverride)
-	cmd = exec.Command("reg", "add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyOverride", "/t", "REG_SZ", "/d", "", "/f")
+	cmd = m.command("reg", "add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyOverride", "/t", "REG_SZ", "/d", "", "/f")
 	if err := cmd.Run(); err != nil {
 		m.logger.Warnf("清空代理例外列表失败: %v", err)
 	}
 
 	// 启用代理
-	cmd = exec.Command("reg", "add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "1", "/f")
+	cmd = m.command("reg", "add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "1", "/f")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("启用代理失败: %v", err)
 	}
 
 	// 通知系统代理设置已更改
-	notifyProxyChangedWindows()
-
-	return nil
+	return m.notifyProxyChangedWindows()
 }
 
 func (m *Manager) disableWindows() error {
 	m.logger.Debug("恢复Windows系统代理设置...")
 
 	// 禁用代理
-	cmd := exec.Command("reg", "add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "0", "/f")
+	cmd := m.command("reg", "add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "0", "/f")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("禁用代理失败: %v", err)
 	}
 
 	// 通知系统代理设置已更改
-	notifyProxyChangedWindows()
-
-	return nil
+	return m.notifyProxyChangedWindows()
 }
 
 // 通知Windows系统代理设置已更改
-func notifyProxyChangedWindows() {
+func (m *Manager) notifyProxyChangedWindows() error {
 	// 使用PowerShell脚本通知Internet Explorer代理设置已更改
-	ps := `$signature = @'
+	ps := `$ErrorActionPreference = "Stop"
+$signature = @'
 [DllImport("wininet.dll", SetLastError = true, CharSet=CharSet.Auto)]
 public static extern bool InternetSetOption(IntPtr hInternet, int dwOption, IntPtr lpBuffer, int dwBufferLength);
 '@
 $type = Add-Type -MemberDefinition $signature -Name WinINet -Namespace PInvoke -PassThru
 $INTERNET_OPTION_SETTINGS_CHANGED = 39
 $INTERNET_OPTION_REFRESH = 37
-$type::InternetSetOption(0, $INTERNET_OPTION_SETTINGS_CHANGED, 0, 0) | Out-Null
-$type::InternetSetOption(0, $INTERNET_OPTION_REFRESH, 0, 0) | Out-Null
+if (-not $type::InternetSetOption(0, $INTERNET_OPTION_SETTINGS_CHANGED, 0, 0)) { throw "InternetSetOption SETTINGS_CHANGED failed" }
+if (-not $type::InternetSetOption(0, $INTERNET_OPTION_REFRESH, 0, 0)) { throw "InternetSetOption REFRESH failed" }
 `
-	cmd := exec.Command("powershell", "-Command", ps)
-	cmd.Run()
+	cmd := m.command("powershell", "-NoProfile", "-NonInteractive", "-Command", ps)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("通知系统代理变更失败: %w", err)
+	}
+	return nil
 }
 
 // ===== Linux 实现 =====
@@ -382,38 +366,38 @@ func (m *Manager) saveSettingsLinux() error {
 	m.logger.Debug("保存Linux代理设置...")
 
 	// 获取GNOME设置
-	cmd := exec.Command("gsettings", "get", "org.gnome.system.proxy", "mode")
+	cmd := m.command("gsettings", "get", "org.gnome.system.proxy", "mode")
 	output, err := cmd.CombinedOutput()
 	if err == nil {
 		m.origSettings["mode"] = strings.TrimSpace(string(output))
 	}
 
-	cmd = exec.Command("gsettings", "get", "org.gnome.system.proxy.http", "host")
+	cmd = m.command("gsettings", "get", "org.gnome.system.proxy.http", "host")
 	output, err = cmd.CombinedOutput()
 	if err == nil {
 		m.origSettings["http_host"] = strings.TrimSpace(string(output))
 	}
 
-	cmd = exec.Command("gsettings", "get", "org.gnome.system.proxy.http", "port")
+	cmd = m.command("gsettings", "get", "org.gnome.system.proxy.http", "port")
 	output, err = cmd.CombinedOutput()
 	if err == nil {
 		m.origSettings["http_port"] = strings.TrimSpace(string(output))
 	}
 
-	cmd = exec.Command("gsettings", "get", "org.gnome.system.proxy.https", "host")
+	cmd = m.command("gsettings", "get", "org.gnome.system.proxy.https", "host")
 	output, err = cmd.CombinedOutput()
 	if err == nil {
 		m.origSettings["https_host"] = strings.TrimSpace(string(output))
 	}
 
-	cmd = exec.Command("gsettings", "get", "org.gnome.system.proxy.https", "port")
+	cmd = m.command("gsettings", "get", "org.gnome.system.proxy.https", "port")
 	output, err = cmd.CombinedOutput()
 	if err == nil {
 		m.origSettings["https_port"] = strings.TrimSpace(string(output))
 	}
 
 	// 保存忽略主机列表
-	cmd = exec.Command("gsettings", "get", "org.gnome.system.proxy", "ignore-hosts")
+	cmd = m.command("gsettings", "get", "org.gnome.system.proxy", "ignore-hosts")
 	output, err = cmd.CombinedOutput()
 	if err == nil {
 		m.origSettings["ignore_hosts"] = strings.TrimSpace(string(output))
@@ -429,35 +413,35 @@ func (m *Manager) enableLinux() error {
 	host, portStr, _ := net.SplitHostPort(m.httpAddr)
 
 	// 设置HTTP代理
-	cmd := exec.Command("gsettings", "set", "org.gnome.system.proxy.http", "host", host)
+	cmd := m.command("gsettings", "set", "org.gnome.system.proxy.http", "host", host)
 	cmd.Run()
 
-	cmd = exec.Command("gsettings", "set", "org.gnome.system.proxy.http", "port", portStr)
+	cmd = m.command("gsettings", "set", "org.gnome.system.proxy.http", "port", portStr)
 	cmd.Run()
 
 	// 设置HTTPS代理
-	cmd = exec.Command("gsettings", "set", "org.gnome.system.proxy.https", "host", host)
+	cmd = m.command("gsettings", "set", "org.gnome.system.proxy.https", "host", host)
 	cmd.Run()
 
-	cmd = exec.Command("gsettings", "set", "org.gnome.system.proxy.https", "port", portStr)
+	cmd = m.command("gsettings", "set", "org.gnome.system.proxy.https", "port", portStr)
 	cmd.Run()
 
 	// 设置SOCKS代理
 	if m.socksAddr != "" {
 		shost, sportStr, _ := net.SplitHostPort(m.socksAddr)
-		cmd = exec.Command("gsettings", "set", "org.gnome.system.proxy.socks", "host", shost)
+		cmd = m.command("gsettings", "set", "org.gnome.system.proxy.socks", "host", shost)
 		cmd.Run()
 
-		cmd = exec.Command("gsettings", "set", "org.gnome.system.proxy.socks", "port", sportStr)
+		cmd = m.command("gsettings", "set", "org.gnome.system.proxy.socks", "port", sportStr)
 		cmd.Run()
 	}
 
 	// 清空忽略主机列表
-	cmd = exec.Command("gsettings", "set", "org.gnome.system.proxy", "ignore-hosts", "[]")
+	cmd = m.command("gsettings", "set", "org.gnome.system.proxy", "ignore-hosts", "[]")
 	cmd.Run()
 
 	// 启用代理
-	cmd = exec.Command("gsettings", "set", "org.gnome.system.proxy", "mode", "manual")
+	cmd = m.command("gsettings", "set", "org.gnome.system.proxy", "mode", "manual")
 	cmd.Run()
 
 	// 设置环境变量
@@ -472,7 +456,7 @@ func (m *Manager) disableLinux() error {
 	m.logger.Debug("恢复Linux系统代理设置...")
 
 	// 禁用GNOME代理
-	cmd := exec.Command("gsettings", "set", "org.gnome.system.proxy", "mode", "none")
+	cmd := m.command("gsettings", "set", "org.gnome.system.proxy", "mode", "none")
 	cmd.Run()
 
 	// 清除环境变量
@@ -482,3 +466,16 @@ func (m *Manager) disableLinux() error {
 
 	return nil
 }
+
+// command keeps platform commands injectable so tests cannot change host settings.
+type systemCommand struct {
+	run  func(string, ...string) ([]byte, error)
+	name string
+	args []string
+}
+
+func (m *Manager) command(name string, args ...string) systemCommand {
+	return systemCommand{m.run, name, args}
+}
+func (c systemCommand) CombinedOutput() ([]byte, error) { return c.run(c.name, c.args...) }
+func (c systemCommand) Run() error                      { _, err := c.CombinedOutput(); return err }

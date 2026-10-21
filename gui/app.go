@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/Sesame2/gotun/gui/internal/tray"
 	"os"
 	"os/exec"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Sesame2/gotun/internal/service"
@@ -23,6 +25,19 @@ type LogEntry struct {
 
 // App struct
 type App struct {
+	actionMu      sync.Mutex
+	actionBusy    atomic.Bool
+	stateMu       sync.RWMutex
+	httpProfileID string
+	tunProfileID  string
+	quitting      atomic.Bool
+	trayReady     atomic.Bool
+	trayMu        sync.Mutex
+	tray          tray.Native
+	trayDone      chan struct{}
+	trayUpdates   chan struct{}
+	trayCloseOnce sync.Once
+	trayInit      sync.Once
 	ctx           context.Context
 	proxyService  *service.ProxyService
 	tunService    *service.TunService
@@ -38,6 +53,7 @@ type App struct {
 // NewApp creates a new App application struct
 func NewApp() *App {
 	return &App{
+		trayDone: make(chan struct{}), trayUpdates: make(chan struct{}, 1),
 		proxyService: service.NewProxyService(),
 		tunService:   service.NewTunService(),
 		logs:         make([]LogEntry, 0, 1000),
@@ -84,13 +100,18 @@ func (a *App) startup(ctx context.Context) {
 
 // shutdown is called when the app is closing
 func (a *App) shutdown(ctx context.Context) {
-	// 停止TUN服务
-	if a.tunService != nil && a.tunService.IsRunning() {
-		a.tunService.Stop()
+	a.quitting.Store(true)
+	a.trayCloseOnce.Do(func() { close(a.trayDone) })
+	a.trayMu.Lock()
+	if a.tray != nil {
+		a.tray.Close()
 	}
-	// 停止代理服务
-	if a.proxyService.IsRunning() {
-		a.proxyService.Stop()
+	a.trayReady.Store(false)
+	a.trayMu.Unlock()
+	a.beginAction()
+	defer a.endAction()
+	if err := a.stopAllProxiesLocked(); err != nil {
+		a.AddLog("ERROR", err.Error())
 	}
 }
 
@@ -98,11 +119,23 @@ func (a *App) shutdown(ctx context.Context) {
 
 // GetProxyStatus 获取代理状态
 func (a *App) GetProxyStatus() service.ProxyStats {
-	return a.proxyService.GetStatus()
+	stats := a.proxyService.GetStatus()
+	a.stateMu.RLock()
+	stats.ProfileID = a.httpProfileID
+	a.stateMu.RUnlock()
+	return stats
 }
 
 // StartProxy 启动代理服务
 func (a *App) StartProxy(profileID string) error {
+	a.beginAction()
+	defer a.endAction()
+	return a.startProxy(profileID)
+}
+func (a *App) startProxy(profileID string) error {
+	if a.quitting.Load() {
+		return fmt.Errorf("application is quitting")
+	}
 	if a.configService == nil {
 		return fmt.Errorf("配置服务未初始化")
 	}
@@ -117,6 +150,12 @@ func (a *App) StartProxy(profileID string) error {
 
 	// 转换配置
 	cfg := a.configService.ProfileToConfig(profile)
+	switch a.GetSettings().SystemProxyMode {
+	case "auto":
+		cfg.SystemProxy = true
+	case "manual":
+		cfg.SystemProxy = false
+	}
 
 	// 启动代理
 	if err := a.proxyService.StartWithConfig(cfg); err != nil {
@@ -125,6 +164,7 @@ func (a *App) StartProxy(profileID string) error {
 	}
 
 	// 更新最后使用时间
+	a.setActiveProfile(profileID, false)
 	a.configService.SetLastUsed(profileID)
 
 	a.AddLog("INFO", fmt.Sprintf("代理服务已启动，HTTP: %s, SOCKS5: %s", cfg.ListenAddr, cfg.SocksAddr))
@@ -133,6 +173,11 @@ func (a *App) StartProxy(profileID string) error {
 
 // StopProxy 停止代理服务
 func (a *App) StopProxy() error {
+	a.beginAction()
+	defer a.endAction()
+	return a.stopProxy()
+}
+func (a *App) stopProxy() error {
 	a.AddLog("INFO", "正在停止代理服务...")
 	err := a.proxyService.Stop()
 	if err != nil {
@@ -145,19 +190,40 @@ func (a *App) StopProxy() error {
 
 // RestartProxy 重启代理服务
 func (a *App) RestartProxy() error {
+	a.beginAction()
+	defer a.endAction()
 	a.AddLog("INFO", "正在重启代理服务...")
-	return a.proxyService.Restart()
+	id := a.GetProxyStatus().ProfileID
+	if _, err := a.GetProfile(id); err != nil {
+		return err
+	}
+	if err := a.stopProxy(); err != nil {
+		return err
+	}
+	return a.startProxy(id)
 }
 
 // ==================== TUN服务相关方法 ====================
 
 // GetTunStatus 获取TUN服务状态
 func (a *App) GetTunStatus() service.TunStats {
-	return a.tunService.GetStatus()
+	stats := a.tunService.GetStatus()
+	a.stateMu.RLock()
+	stats.ProfileID = a.tunProfileID
+	a.stateMu.RUnlock()
+	return stats
 }
 
 // StartTunProxy 启动TUN代理服务
 func (a *App) StartTunProxy(profileID string) error {
+	a.beginAction()
+	defer a.endAction()
+	return a.startTunProxy(profileID)
+}
+func (a *App) startTunProxy(profileID string) error {
+	if a.quitting.Load() {
+		return fmt.Errorf("application is quitting")
+	}
 	if a.configService == nil {
 		return fmt.Errorf("配置服务未初始化")
 	}
@@ -201,6 +267,7 @@ func (a *App) StartTunProxy(profileID string) error {
 	}
 
 	// 更新最后使用时间
+	a.setActiveProfile(profileID, true)
 	a.configService.SetLastUsed(profileID)
 
 	mode := "路由模式"
@@ -213,6 +280,11 @@ func (a *App) StartTunProxy(profileID string) error {
 
 // StopTunProxy 停止TUN代理服务
 func (a *App) StopTunProxy() error {
+	a.beginAction()
+	defer a.endAction()
+	return a.stopTunProxy()
+}
+func (a *App) stopTunProxy() error {
 	a.AddLog("INFO", "正在停止TUN服务...")
 	err := a.tunService.Stop()
 	if err != nil {
@@ -264,7 +336,7 @@ func (a *App) RequestElevationRestart() error {
 			a.AddLog("INFO", "提权成功，正在退出当前实例...")
 			// 给新进程足够时间启动
 			time.Sleep(1 * time.Second)
-			wailsRuntime.Quit(a.ctx)
+			a.QuitApp()
 		}()
 		return nil
 
@@ -295,7 +367,7 @@ func (a *App) RequestElevationRestart() error {
 	// 退出当前应用
 	go func() {
 		time.Sleep(500 * time.Millisecond)
-		wailsRuntime.Quit(a.ctx)
+		a.QuitApp()
 	}()
 
 	return nil
@@ -357,9 +429,13 @@ func (a *App) GetSettings() service.AppSettings {
 
 // UpdateSettings 更新应用设置
 func (a *App) UpdateSettings(settings service.AppSettings) error {
+	a.beginAction()
+	defer a.endAction()
 	if a.configService == nil {
 		return fmt.Errorf("配置服务未初始化")
 	}
+	// The native menu owns this preference; stale frontend settings must not overwrite it.
+	settings.SystemProxyMode = a.GetSettings().SystemProxyMode
 	return a.configService.UpdateSettings(settings)
 }
 
@@ -527,6 +603,8 @@ func (a *App) OpenURL(url string) {
 
 // SetAutoStart 设置开机自启动
 func (a *App) SetAutoStart(enabled bool) error {
+	a.beginAction()
+	defer a.endAction()
 	// 更新设置
 	if a.configService == nil {
 		return fmt.Errorf("配置服务未初始化")
@@ -546,6 +624,8 @@ func (a *App) SetAutoStart(enabled bool) error {
 
 // SetMinimizeToTray 设置关闭时最小化到托盘
 func (a *App) SetMinimizeToTray(enabled bool) error {
+	a.beginAction()
+	defer a.endAction()
 	// 更新设置
 	if a.configService == nil {
 		return fmt.Errorf("配置服务未初始化")
@@ -567,9 +647,13 @@ func (a *App) HideWindow() {
 // ShowWindow 显示窗口
 func (a *App) ShowWindow() {
 	wailsRuntime.WindowShow(a.ctx)
+	wailsRuntime.WindowUnminimise(a.ctx)
 }
 
 // QuitApp 退出应用
 func (a *App) QuitApp() {
-	wailsRuntime.Quit(a.ctx)
+	a.quitting.Store(true)
+	if a.ctx != nil {
+		wailsRuntime.Quit(a.ctx)
+	}
 }

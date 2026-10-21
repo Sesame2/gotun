@@ -264,3 +264,19 @@ it('keeps the global TUN stop action reachable when the selected profile has TUN
   await screen.findByText('TUN代理服务已停止');
   expect(bridge.app.StopTunProxy).toHaveBeenCalledTimes(1);
 });
+
+it('reflects a profile activated from the native tray', async () => {
+  bridge.setProfiles([profile(), profile({ id: 'remote', name: 'From Tray' })]);
+  bridge.app.GetProxyStatus.mockResolvedValue(proxyStats({ status: 'running', profileId: 'remote' }));
+  renderHome();
+  await waitFor(() => expect(screen.getByRole('combobox', { name: '选择配置' })).toHaveTextContent('From Tray'));
+  expect(localStorage.getItem('gotun_last_profile_id')).toBe('remote');
+});
+
+it('reflects the tray TUN profile and opens its active panel', async () => {
+  bridge.setProfiles([profile(), profile({ id: 'tun-tray', name: 'Tray TUN', tunMode: true })]);
+  bridge.app.GetTunStatus.mockResolvedValue(tunStats({ status: 'running', profileId: 'tun-tray' }));
+  renderHome();
+  await waitFor(() => expect(screen.getByRole('combobox', { name: '选择配置' })).toHaveTextContent('Tray TUN'));
+  expect(screen.getByRole('tab', { name: 'TUN模式' })).toHaveAttribute('aria-selected', 'true');
+});

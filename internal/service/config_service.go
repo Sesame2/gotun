@@ -47,14 +47,15 @@ type TunNATRule struct {
 
 // AppSettings 应用设置
 type AppSettings struct {
-	Theme          string `json:"theme"`          // "light" | "dark" | "system"
-	Language       string `json:"language"`       // "zh-CN" | "en-US"
-	AutoStart      bool   `json:"autoStart"`      // 开机自启
-	MinimizeToTray bool   `json:"minimizeToTray"` // 最小化到托盘
-	AutoConnect    bool   `json:"autoConnect"`    // 启动时自动连接
-	DefaultProfile string `json:"defaultProfile"` // 默认配置文件ID
-	Verbose        bool   `json:"verbose"`        // 详细日志
-	LogFile        string `json:"logFile"`        // 日志文件路径
+	SystemProxyMode string `json:"systemProxyMode,omitempty"`
+	Theme           string `json:"theme"`          // "light" | "dark" | "system"
+	Language        string `json:"language"`       // "zh-CN" | "en-US"
+	AutoStart       bool   `json:"autoStart"`      // 开机自启
+	MinimizeToTray  bool   `json:"minimizeToTray"` // 最小化到托盘
+	AutoConnect     bool   `json:"autoConnect"`    // 启动时自动连接
+	DefaultProfile  string `json:"defaultProfile"` // 默认配置文件ID
+	Verbose         bool   `json:"verbose"`        // 详细日志
+	LogFile         string `json:"logFile"`        // 日志文件路径
 }
 
 // ConfigData 配置数据
@@ -179,6 +180,11 @@ func (s *ConfigService) GetSettings() AppSettings {
 
 // UpdateSettings 更新应用设置
 func (s *ConfigService) UpdateSettings(settings AppSettings) error {
+	switch settings.SystemProxyMode {
+	case "", "follow-profile", "auto", "manual":
+	default:
+		return fmt.Errorf("无效的系统代理模式: %s", settings.SystemProxyMode)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	previous := s.data.Settings

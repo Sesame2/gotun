@@ -64,14 +64,10 @@ export function useTunStatus(pollInterval: number = 2000): UseTunStatusReturn {
 
   // 轮询状态
   useEffect(() => {
-    // 过渡状态也需要轮询，才能观察启动或停止完成。
-    if (!tunStatus || !['running', 'starting', 'stopping'].includes(tunStatus.status)) {
-      return;
-    }
-
+    // Tray actions can start a stopped service while this window stays open.
     const interval = setInterval(fetchStatus, pollInterval);
     return () => clearInterval(interval);
-  }, [tunStatus?.status, pollInterval, fetchStatus]);
+  }, [pollInterval, fetchStatus]);
 
   const startTun = useCallback(async (profileId: string) => {
     setLoading(true);

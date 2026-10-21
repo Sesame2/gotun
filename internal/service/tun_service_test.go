@@ -1,9 +1,16 @@
 package service
 
 import (
+	"errors"
 	"os"
 	"runtime"
 	"testing"
+	"time"
+
+	"github.com/Sesame2/gotun/internal/config"
+	"github.com/Sesame2/gotun/internal/logger"
+	"github.com/Sesame2/gotun/internal/proxy"
+	"github.com/Sesame2/gotun/internal/testutil"
 )
 
 func TestNewTunService(t *testing.T) {
@@ -278,5 +285,154 @@ func TestGetElevationCommand(t *testing.T) {
 	case "windows":
 		// Windows 使用不同的提权机制
 		// 可能返回空或特殊命令
+	}
+}
+
+type fakeNativeTun struct {
+	start    func() error
+	closeErr error
+	closes   int
+}
+
+func (f *fakeNativeTun) Start() error {
+	if f.start != nil {
+		return f.start()
+	}
+	return nil
+}
+func (f *fakeNativeTun) Close() error { f.closes++; return f.closeErr }
+func tunServiceWithFake(t *testing.T, f *fakeNativeTun) *TunService {
+	t.Helper()
+	server := testutil.NewSSHServer(t)
+	s := NewTunService()
+	s.SetConfig(&TunConfig{TunMode: true, TunCIDR: "10.0.0.1/24"})
+	s.SetFullConfig(server.Config())
+	s.needsElevation = func() bool { return false }
+	s.newNative = func(*config.Config, *logger.Logger, *proxy.SSHClient) (nativeTun, error) { return f, nil }
+	t.Cleanup(func() { _ = s.Stop() })
+	return s
+}
+
+func TestTunStartWaitsForNativeSetupAndSerializesStop(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	fake := &fakeNativeTun{start: func() error { close(entered); <-release; return nil }}
+	s := tunServiceWithFake(t, fake)
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	started := make(chan error, 1)
+	go func() { started <- s.Start() }()
+	select {
+	case <-entered:
+	case err := <-started:
+		t.Fatalf("Start failed before setup: %v", err)
+	}
+	if s.GetStatus().Status != TunStatusStarting {
+		t.Fatal("reported running before setup")
+	}
+	select {
+	case err := <-started:
+		t.Fatalf("Start returned early: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	stopped := make(chan error, 1)
+	go func() { stopped <- s.Stop() }()
+	select {
+	case err := <-stopped:
+		t.Fatalf("Stop bypassed startup lifecycle: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	if err := <-started; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-stopped; err != nil {
+		t.Fatal(err)
+	}
+	if s.GetStatus().Status != TunStatusStopped || fake.closes != 1 {
+		t.Fatal("Stop did not clean up completed startup")
+	}
+}
+
+func TestTunStartupFailureIsSynchronousAndCleansResources(t *testing.T) {
+	failure := errors.New("native setup failed")
+	fake := &fakeNativeTun{start: func() error { return failure }}
+	s := tunServiceWithFake(t, fake)
+	if err := s.Start(); !errors.Is(err, failure) {
+		t.Fatalf("Start error = %v", err)
+	}
+	if s.GetStatus().Status != TunStatusError || fake.closes != 1 || s.sshClient != nil || s.tunService != nil {
+		t.Fatal("failed start leaked resources or status")
+	}
+	if err := s.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if s.GetStatus().Status != TunStatusStopped {
+		t.Fatal("Stop did not reset error status")
+	}
+}
+
+func TestTunStopCleansErrorAndStartingStatesAndReportsFailure(t *testing.T) {
+	for _, status := range []TunStatus{TunStatusStarting, TunStatusError, TunStatusStopped} {
+		t.Run(string(status), func(t *testing.T) {
+			failure := errors.New("close failed")
+			fake := &fakeNativeTun{closeErr: failure}
+			s := NewTunService()
+			s.status = status
+			s.tunService = fake
+			if err := s.Stop(); !errors.Is(err, failure) {
+				t.Fatalf("Stop error = %v", err)
+			}
+			if fake.closes != 1 || s.GetStatus().Status != TunStatusError || s.tunService == nil {
+				t.Fatal("cleanup failure lost retry state")
+			}
+			fake.closeErr = nil
+			if err := s.Stop(); err != nil {
+				t.Fatal(err)
+			}
+			if fake.closes != 2 || s.GetStatus().Status != TunStatusStopped || s.tunService != nil {
+				t.Fatal("retry did not finish cleanup")
+			}
+		})
+	}
+}
+
+func TestTunFailedStartRetainsFailedCleanupForStopRetry(t *testing.T) {
+	startFailure, closeFailure := errors.New("setup failed"), errors.New("cleanup failed")
+	fake := &fakeNativeTun{start: func() error { return startFailure }, closeErr: closeFailure}
+	s := tunServiceWithFake(t, fake)
+	err := s.Start()
+	if !errors.Is(err, startFailure) || !errors.Is(err, closeFailure) {
+		t.Fatalf("Start omitted error: %v", err)
+	}
+	if s.sshClient != nil || s.tunService == nil {
+		t.Fatal("wrong pending cleanup state")
+	}
+	if err := s.Start(); err == nil {
+		t.Fatal("Start replaced native handle awaiting cleanup")
+	}
+	fake.closeErr = nil
+	if err := s.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if s.tunService != nil || s.GetStatus().Status != TunStatusStopped {
+		t.Fatal("Stop failed to clean pending native service")
+	}
+}
+
+func TestTunInitializationFailureClosesSSH(t *testing.T) {
+	s := tunServiceWithFake(t, &fakeNativeTun{})
+	s.newNative = func(*config.Config, *logger.Logger, *proxy.SSHClient) (nativeTun, error) {
+		return nil, errors.New("native constructor failed")
+	}
+	if err := s.Start(); err == nil {
+		t.Fatal("accepted native constructor failure")
+	}
+	if s.sshClient != nil || s.tunService != nil || s.GetStatus().Status != TunStatusError {
+		t.Fatal("constructor failure leaked state")
 	}
 }

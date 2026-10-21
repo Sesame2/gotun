@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -74,6 +75,7 @@ func (c *TunConfig) Validate() error {
 
 // TunStats TUN服务统计信息
 type TunStats struct {
+	ProfileID    string    `json:"profileId,omitempty"`
 	Status       TunStatus `json:"status"`
 	TunIP        string    `json:"tunIP,omitempty"`
 	TunDevice    string    `json:"tunDevice,omitempty"`
@@ -85,23 +87,34 @@ type TunStats struct {
 	ErrorMessage string    `json:"errorMessage,omitempty"`
 }
 
+type nativeTun interface {
+	Start() error
+	Close() error
+}
+
 // TunService TUN服务管理
 type TunService struct {
-	mu          sync.RWMutex
-	cfg         *TunConfig
-	fullCfg     *config.Config // 完整配置(用于SSH连接)
-	logger      *logger.Logger
-	sshClient   *proxy.SSHClient
-	tunService  *tun.TunService
-	status      TunStatus
-	startTime   time.Time
-	errMsg      string
-	logCallback logger.LogCallback
+	lifecycleMu    sync.Mutex
+	newNative      func(*config.Config, *logger.Logger, *proxy.SSHClient) (nativeTun, error)
+	needsElevation func() bool
+	mu             sync.RWMutex
+	cfg            *TunConfig
+	fullCfg        *config.Config // 完整配置(用于SSH连接)
+	logger         *logger.Logger
+	sshClient      *proxy.SSHClient
+	tunService     nativeTun
+	status         TunStatus
+	startTime      time.Time
+	errMsg         string
+	logCallback    logger.LogCallback
 }
 
 // NewTunService 创建TUN服务
 func NewTunService() *TunService {
 	return &TunService{
+		newNative: func(cfg *config.Config, log *logger.Logger, ssh *proxy.SSHClient) (nativeTun, error) {
+			return tun.NewTunService(cfg, log, ssh)
+		},
 		cfg: &TunConfig{
 			TunCIDR: "10.0.0.1/24", // 默认CIDR
 		},
@@ -141,15 +154,25 @@ func (s *TunService) log(level, message string) {
 
 // SetConfig 设置TUN配置
 func (s *TunService) SetConfig(cfg *TunConfig) {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.status == TunStatusRunning || s.status == TunStatusStarting || s.status == TunStatusStopping {
+		return
+	}
 	s.cfg = cfg
 }
 
 // SetFullConfig 设置完整配置(包含SSH信息)
 func (s *TunService) SetFullConfig(cfg *config.Config) {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.status == TunStatusRunning || s.status == TunStatusStarting || s.status == TunStatusStopping {
+		return
+	}
 	s.fullCfg = cfg
 }
 
@@ -175,11 +198,6 @@ func (s *TunService) GetStatus() TunStats {
 	if s.status == TunStatusRunning && !s.startTime.IsZero() {
 		stats.StartTime = s.startTime
 		stats.Uptime = time.Since(s.startTime).Round(time.Second).String()
-
-		// 获取 TUN 设备信息
-		if s.tunService != nil {
-			// TODO: 从 tunService 获取设备名称和IP
-		}
 	}
 
 	return stats
@@ -240,12 +258,18 @@ func (s *TunService) GetElevationCommand() []string {
 
 // Start 启动TUN服务
 func (s *TunService) Start() error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
 	s.mu.Lock()
 	if s.status == TunStatusRunning || s.status == TunStatusStarting {
 		s.mu.Unlock()
 		return fmt.Errorf("TUN服务已在运行中")
 	}
 
+	if s.tunService != nil || s.sshClient != nil {
+		s.mu.Unlock()
+		return fmt.Errorf("请先停止并清理上次的TUN服务")
+	}
 	if s.cfg == nil || !s.cfg.TunMode {
 		s.mu.Unlock()
 		return fmt.Errorf("TUN模式未启用")
@@ -267,7 +291,11 @@ func (s *TunService) Start() error {
 	}
 
 	// 检查权限
-	if s.RequiresElevation() {
+	needsElevation := s.RequiresElevation
+	if s.needsElevation != nil {
+		needsElevation = s.needsElevation
+	}
+	if needsElevation() {
 		err := fmt.Errorf("TUN模式需要管理员权限")
 		s.setError(err.Error())
 		return err
@@ -308,23 +336,24 @@ func (s *TunService) Start() error {
 	s.log("INFO", "SSH连接已建立")
 
 	// 初始化 TUN 服务
-	tunService, err := tun.NewTunService(s.fullCfg, s.logger, sshClient)
+	tunService, err := s.newNative(s.fullCfg, s.logger, sshClient)
 	if err != nil {
 		sshClient.Close()
+		s.sshClient = nil
 		errMsg := fmt.Sprintf("TUN服务初始化失败: %v", err)
 		s.setError(errMsg)
 		return fmt.Errorf("%s", errMsg)
 	}
 	s.tunService = tunService
 
-	// 启动 TUN 服务
-	go func() {
-		if err := tunService.Start(); err != nil {
-			s.log("ERROR", fmt.Sprintf("TUN服务启动失败: %v", err))
-			s.setError(fmt.Sprintf("TUN服务启动失败: %v", err))
-			return
-		}
-	}()
+	// Native Start completes setup and starts its own pumps before returning.
+	if err := tunService.Start(); err != nil {
+		startErr := fmt.Errorf("TUN服务启动失败: %w", err)
+		cleanupErr := s.closeResources()
+		err = errors.Join(startErr, cleanupErr)
+		s.setError(err.Error())
+		return err
+	}
 
 	s.mu.Lock()
 	s.status = TunStatusRunning
@@ -342,37 +371,52 @@ func (s *TunService) Start() error {
 
 // Stop 停止TUN服务
 func (s *TunService) Stop() error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
 	s.mu.Lock()
-	if s.status != TunStatusRunning {
+	if s.status == TunStatusStopped && s.tunService == nil && s.sshClient == nil {
 		s.mu.Unlock()
 		return nil
 	}
 	s.status = TunStatusStopping
 	s.mu.Unlock()
-
 	s.log("INFO", "正在停止TUN服务...")
-
-	// 关闭 TUN 服务
-	if s.tunService != nil {
-		if err := s.tunService.Close(); err != nil {
-			s.log("ERROR", fmt.Sprintf("关闭TUN服务失败: %v", err))
-		}
-		s.tunService = nil
-	}
-
-	// 关闭 SSH 连接
-	if s.sshClient != nil {
-		s.sshClient.Close()
-		s.sshClient = nil
-	}
-
+	err := s.closeResources()
 	s.mu.Lock()
-	s.status = TunStatusStopped
 	s.startTime = time.Time{}
+	if err != nil {
+		s.status = TunStatusError
+		s.errMsg = err.Error()
+	} else {
+		s.status = TunStatusStopped
+		s.errMsg = ""
+	}
 	s.mu.Unlock()
-
+	if err != nil {
+		return err
+	}
 	s.log("INFO", "TUN服务已停止")
 	return nil
+}
+
+// A failed native close retains the handle so Stop can retry cleanup.
+func (s *TunService) closeResources() error {
+	var failures []error
+	if s.tunService != nil {
+		if err := s.tunService.Close(); err != nil {
+			failures = append(failures, fmt.Errorf("关闭TUN服务失败: %w", err))
+		} else {
+			s.tunService = nil
+		}
+	}
+	if s.sshClient != nil {
+		if err := s.sshClient.Close(); err != nil {
+			failures = append(failures, fmt.Errorf("关闭SSH连接失败: %w", err))
+		} else {
+			s.sshClient = nil
+		}
+	}
+	return errors.Join(failures...)
 }
 
 // setStatus 设置状态
