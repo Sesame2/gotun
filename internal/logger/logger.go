@@ -19,21 +19,39 @@ const (
 	LevelFatal
 )
 
+// LogCallback 日志回调函数类型
+type LogCallback func(level string, message string)
+
 // Logger 处理应用日志
 type Logger struct {
-	verbose bool
-	logger  *log.Logger
-	level   LogLevel
-	file    *os.File
+	verbose  bool
+	logger   *log.Logger
+	level    LogLevel
+	file     *os.File
+	callback LogCallback
 }
 
 // NewLogger 创建日志记录器
 func NewLogger(verbose bool) *Logger {
+	level := LevelInfo
+	if verbose {
+		level = LevelDebug
+	}
 	return &Logger{
 		verbose: verbose,
 		logger:  log.New(os.Stdout, "", log.LstdFlags),
-		level:   LevelInfo,
+		level:   level,
 	}
+}
+
+// SetCallback 设置日志回调函数
+func (l *Logger) SetCallback(cb LogCallback) {
+	l.callback = cb
+}
+
+// GetCallback 获取日志回调函数
+func (l *Logger) GetCallback() LogCallback {
+	return l.callback
 }
 
 // SetLogFile 设置日志输出文件
@@ -80,28 +98,39 @@ func (l *Logger) log(level LogLevel, format string, args ...interface{}) {
 	}
 
 	var prefix string
+	var levelStr string
 
 	switch level {
 	case LevelDebug:
 		prefix = "[DEBUG] "
+		levelStr = "DEBUG"
 	case LevelInfo:
 		prefix = "[INFO] "
+		levelStr = "INFO"
 	case LevelWarn:
 		prefix = "[WARN] "
+		levelStr = "WARN"
 	case LevelError:
 		prefix = "[ERROR] "
+		levelStr = "ERROR"
 	case LevelFatal:
 		prefix = "[FATAL] "
+		levelStr = "ERROR"
 	}
 
 	msg := fmt.Sprintf(format, args...)
 	l.logger.Println(prefix + msg)
+
+	// 调用回调
+	if l.callback != nil {
+		l.callback(levelStr, msg)
+	}
 }
 
 // Debug 记录调试日志
 func (l *Logger) Debug(msg string) {
 	if l.verbose {
-		l.log(LevelDebug, msg)
+		l.log(LevelDebug, "%s", msg)
 	}
 }
 
@@ -114,7 +143,7 @@ func (l *Logger) Debugf(format string, args ...interface{}) {
 
 // Info 记录信息日志
 func (l *Logger) Info(msg string) {
-	l.log(LevelInfo, msg)
+	l.log(LevelInfo, "%s", msg)
 }
 
 // Infof 记录格式化信息日志
@@ -124,7 +153,7 @@ func (l *Logger) Infof(format string, args ...interface{}) {
 
 // Warn 记录警告日志
 func (l *Logger) Warn(msg string) {
-	l.log(LevelWarn, msg)
+	l.log(LevelWarn, "%s", msg)
 }
 
 // Warnf 记录格式化警告日志
@@ -134,7 +163,7 @@ func (l *Logger) Warnf(format string, args ...interface{}) {
 
 // Error 记录错误日志
 func (l *Logger) Error(msg string) {
-	l.log(LevelError, msg)
+	l.log(LevelError, "%s", msg)
 }
 
 // Errorf 记录格式化错误日志
@@ -144,7 +173,7 @@ func (l *Logger) Errorf(format string, args ...interface{}) {
 
 // Fatal 记录致命错误并退出
 func (l *Logger) Fatal(msg string) {
-	l.log(LevelFatal, msg)
+	l.log(LevelFatal, "%s", msg)
 	os.Exit(1)
 }
 

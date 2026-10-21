@@ -87,33 +87,56 @@ func NewSSHClient(cfg *config.Config, log *logger.Logger) (*SSHClient, error) {
 		jumpClients: []*ssh.Client{},
 	}
 
-	// 尝试连接所有跳板机
-	for i, jumpHostsStr := range cfg.JumpHosts {
-		user, host, port, err := cfg.GetJumpHostInfo(jumpHostsStr)
-		if err != nil {
-			log.Errorf("跳板机参数解析失败: %v", err)
-			sshClient.Close()
-			return nil, err
-		}
-		if user == "" {
-			user = cfg.SSHUser
-		}
-		addr := fmt.Sprintf("%s:%s", host, port)
-		log.Infof("准备连接跳板机 %d/%d: %s", i+1, len(cfg.JumpHosts), addr)
+	// 优先使用结构化配置 (GUI)
+	if len(cfg.JumpHostsList) > 0 {
+		for i, jh := range cfg.JumpHostsList {
+			addr := fmt.Sprintf("%s:%s", jh.Host, jh.Port)
+			log.Infof("准备连接跳板机 (GUI) %d/%d: %s", i+1, len(cfg.JumpHostsList), addr)
 
-		var lastClient *ssh.Client
-		if len(sshClient.jumpClients) > 0 {
-			lastClient = sshClient.jumpClients[len(sshClient.jumpClients)-1]
-		}
+			var lastClient *ssh.Client
+			if len(sshClient.jumpClients) > 0 {
+				lastClient = sshClient.jumpClients[len(sshClient.jumpClients)-1]
+			}
 
-		client, err := connectToHost(cfg, log, user, addr, lastClient)
-		if err != nil {
-			log.Errorf("连接跳板机 %s 失败: %v", addr, err)
-			sshClient.Close()
-			return nil, err
+			client, err := connectToHost(cfg, log, jh.User, jh.Password, addr, lastClient)
+			if err != nil {
+				log.Errorf("连接跳板机 %s 失败: %v", addr, err)
+				sshClient.Close()
+				return nil, err
+			}
+			sshClient.jumpClients = append(sshClient.jumpClients, client)
+			log.Infof("已连接跳板机 %d: %s@%s", i+1, jh.User, addr)
 		}
-		sshClient.jumpClients = append(sshClient.jumpClients, client)
-		log.Infof("已连接跳板机 %d: %s@%s", i+1, user, addr)
+	} else {
+		// 否则尝试使用字符串列表 (CLI Legacy)
+		for i, jumpHostsStr := range cfg.JumpHosts {
+			user, host, port, err := cfg.GetJumpHostInfo(jumpHostsStr)
+			if err != nil {
+				log.Errorf("跳板机参数解析失败: %v", err)
+				sshClient.Close()
+				return nil, err
+			}
+			if user == "" {
+				user = cfg.SSHUser
+			}
+			addr := fmt.Sprintf("%s:%s", host, port)
+			log.Infof("准备连接跳板机 %d/%d: %s", i+1, len(cfg.JumpHosts), addr)
+
+			var lastClient *ssh.Client
+			if len(sshClient.jumpClients) > 0 {
+				lastClient = sshClient.jumpClients[len(sshClient.jumpClients)-1]
+			}
+
+			// CLI模式下跳板机通常共用主密码或使用密钥
+			client, err := connectToHost(cfg, log, user, cfg.SSHPassword, addr, lastClient)
+			if err != nil {
+				log.Errorf("连接跳板机 %s 失败: %v", addr, err)
+				sshClient.Close()
+				return nil, err
+			}
+			sshClient.jumpClients = append(sshClient.jumpClients, client)
+			log.Infof("已连接跳板机 %d: %s@%s", i+1, user, addr)
+		}
 	}
 
 	// 准备连接最终目标服务器
@@ -123,7 +146,7 @@ func NewSSHClient(cfg *config.Config, log *logger.Logger) (*SSHClient, error) {
 		lastJumpClient = sshClient.jumpClients[len(sshClient.jumpClients)-1]
 	}
 
-	finalClient, err := connectToHost(cfg, log, cfg.SSHUser, cfg.SSHServer, lastJumpClient)
+	finalClient, err := connectToHost(cfg, log, cfg.SSHUser, cfg.SSHPassword, cfg.SSHServer, lastJumpClient)
 	if err != nil {
 		log.Errorf("连接目标服务器 %s 失败: %v", cfg.SSHServer, err)
 		sshClient.Close()
@@ -136,7 +159,7 @@ func NewSSHClient(cfg *config.Config, log *logger.Logger) (*SSHClient, error) {
 }
 
 // connectToHost 封装了连接单个主机（跳板机或最终目标）的完整逻辑
-func connectToHost(cfg *config.Config, log *logger.Logger, user, addr string, jumpVia *ssh.Client) (*ssh.Client, error) {
+func connectToHost(cfg *config.Config, log *logger.Logger, user, password, addr string, jumpVia *ssh.Client) (*ssh.Client, error) {
 	// 阶段一：仅尝试私钥认证
 	log.Debugf("阶段 1: 尝试使用私钥连接 %s", addr)
 	keyAuthCfg := &AuthConfig{User: user, ServerAddr: addr, KeyFile: cfg.SSHKeyFile}
@@ -153,9 +176,9 @@ func connectToHost(cfg *config.Config, log *logger.Logger, user, addr string, ju
 	}
 
 	// 阶段二：如果私钥失败，并且配置了密码/交互模式，则尝试它们
-	if cfg.InteractiveAuth || cfg.SSHPassword != "" {
+	if cfg.InteractiveAuth || password != "" {
 		log.Debugf("阶段 2: 尝试使用密码/交互式认证连接 %s", addr)
-		passwordAuthCfg := &AuthConfig{User: user, ServerAddr: addr, Password: cfg.SSHPassword, InteractiveAuth: cfg.InteractiveAuth}
+		passwordAuthCfg := &AuthConfig{User: user, ServerAddr: addr, Password: password, InteractiveAuth: cfg.InteractiveAuth}
 		passwordAuths, err := getAuthMethods(passwordAuthCfg, log, true) // true表示仅获取密码
 		if err == nil && len(passwordAuths) > 0 {
 			client, err := trySingleConnection(user, addr, cfg.Timeout, passwordAuths, jumpVia)

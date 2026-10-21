@@ -30,6 +30,37 @@ go.work.sum
 # Editor/IDE
 .idea/
 .vscode/
-build/*
 .DS_Store
 *.log
+
+# Build output
+build/
+dist/
+
+# GUI/Wails
+gui/build/
+gui/frontend/dist/
+gui/frontend/node_modules/
+gui/frontend/coverage/
+gui/wailsjs/
+gui/frontend/wailsjs/
+gui/frontend/package.json.md5
+gui/gui
+gui/gotun
+gui/gotun.exe
+
+# Temporary directories
+*_temp/
+*_tmp/
+
+# macOS
+*.app
+*.dmg
+
+# Windows
+*.msi
+
+# Temp files
+*.tmp
+*.temp
+*~

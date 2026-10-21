@@ -86,6 +86,9 @@ func NewRouter(path string) (*Router, error) {
 
 	for i, line := range cfg.Rules {
 		parts := strings.Split(line, ",")
+		for j := range parts {
+			parts[j] = strings.TrimSpace(parts[j])
+		}
 		if len(parts) < 2 {
 			continue
 		}
@@ -100,9 +103,15 @@ func NewRouter(path string) (*Router, error) {
 		}
 
 		var target Action
-		if len(parts) > 2 {
+		action := ""
+		if ruleType == Match && len(parts) == 2 {
+			action = parts[1]
+		} else if len(parts) > 2 {
+			action = parts[2]
+		}
+		if action != "" {
 			// 如果是预期之外的类型统一视为 PROXY
-			switch strings.ToUpper(parts[2]) {
+			switch strings.ToUpper(action) {
 			case "DIRECT":
 				target = ActionDirect
 			case "REJECT":
@@ -118,6 +127,12 @@ func NewRouter(path string) (*Router, error) {
 			Type:    ruleType,
 			Payload: parts[1],
 			Target:  target,
+		}
+		switch ruleType {
+		case Domain, DomainSuffix:
+			rule.Payload = strings.TrimSuffix(strings.ToLower(rule.Payload), ".")
+		case DomainKeyword:
+			rule.Payload = strings.ToLower(rule.Payload)
 		}
 		router.rules = append(router.rules, rule)
 	}
@@ -140,6 +155,7 @@ func (r *Router) Match(host string) Action {
 		// 如果有端口就去掉端口
 		hostname = h
 	}
+	hostname = strings.TrimSuffix(strings.ToLower(hostname), ".")
 
 	// IP形式的规则
 	ip := net.ParseIP(hostname)
@@ -147,7 +163,7 @@ func (r *Router) Match(host string) Action {
 		match := false
 		switch rule.Type {
 		case DomainSuffix:
-			match = strings.HasSuffix(hostname, rule.Payload)
+			match = hostname == rule.Payload || strings.HasSuffix(hostname, "."+rule.Payload)
 		case DomainKeyword:
 			match = strings.Contains(hostname, rule.Payload)
 		case Domain:

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -12,6 +13,14 @@ import (
 type SubnetAlias struct {
 	Src *net.IPNet
 	Dst *net.IPNet
+}
+
+// JumpHost 定义跳板机配置
+type JumpHost struct {
+	Host     string `json:"host"`
+	Port     string `json:"port"`
+	User     string `json:"user"`
+	Password string `json:"password,omitempty"`
 }
 
 // Config 存储应用配置
@@ -29,7 +38,8 @@ type Config struct {
 	TunRoute        []string      // 需要路由到 TUN 的网段
 	TunGlobal       bool          // 是否开启全局模式
 	SubnetAliases   []SubnetAlias // 网段/IP映射规则 (NAT)
-	JumpHosts       []string      // 跳板机列表
+	JumpHosts       []string      // 跳板机列表 (CLI/Legacy)
+	JumpHostsList   []JumpHost    // 跳板机列表 (GUI/Structured)
 	Timeout         time.Duration
 	Verbose         bool
 	LogFile         string
@@ -45,6 +55,7 @@ func NewConfig() *Config {
 		SSHServer:       "",
 		SSHPort:         "22", // 默认SSH端口
 		JumpHosts:       []string{},
+		JumpHostsList:   []JumpHost{},
 		Timeout:         10 * time.Second,
 		Verbose:         false,
 		InteractiveAuth: true,
@@ -90,8 +101,19 @@ func parseJumpHost(jumpHost string) (user, host, port string, err error) {
 	if host == "" {
 		return "", "", "", fmt.Errorf("主机名不能为空")
 	}
+	if err := validatePort(port); err != nil {
+		return "", "", "", err
+	}
 
 	return user, host, port, nil
+}
+
+func validatePort(port string) error {
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return fmt.Errorf("无效的SSH端口: %s (应为 1-65535)", port)
+	}
+	return nil
 }
 
 // Validate 验证配置
@@ -108,7 +130,7 @@ func (c *Config) Validate() error {
 		return errors.New("必须提供SSH密码、私钥文件或使用交互式认证")
 	}
 
-	// 验证跳板机格式
+	// 验证跳板机格式 (CLI/Legacy)
 	for _, jumpHost := range c.JumpHosts {
 		if jumpHost == "" {
 			continue
@@ -119,10 +141,54 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// 验证结构化跳板机配置 (GUI)
+	for i, jh := range c.JumpHostsList {
+		if jh.Host == "" {
+			return fmt.Errorf("第 %d 个跳板机配置缺少主机地址", i+1)
+		}
+		if jh.User == "" {
+			return fmt.Errorf("第 %d 个跳板机配置缺少用户名", i+1)
+		}
+		if jh.Port == "" {
+			c.JumpHostsList[i].Port = "22"
+		}
+		if err := validatePort(c.JumpHostsList[i].Port); err != nil {
+			return fmt.Errorf("第 %d 个跳板机配置: %w", i+1, err)
+		}
+	}
+
 	return nil
 }
 
 // GetJumpHostInfo 获取跳板机信息
 func (c *Config) GetJumpHostInfo(jumpHost string) (user, host, port string, err error) {
 	return parseJumpHost(jumpHost)
+}
+
+// ParseSubnetAlias 解析子网别名规则 (格式: SrcCIDR:DstCIDR)
+func ParseSubnetAlias(alias string) (SubnetAlias, error) {
+	parts := strings.Split(alias, ":")
+	if len(parts) != 2 {
+		return SubnetAlias{}, fmt.Errorf("无效的NAT映射格式: %s (应为 SrcCIDR:DstCIDR)", alias)
+	}
+
+	_, srcNet, err := net.ParseCIDR(parts[0])
+	if err != nil {
+		return SubnetAlias{}, fmt.Errorf("无效的源CIDR: %s (%v)", parts[0], err)
+	}
+
+	_, dstNet, err := net.ParseCIDR(parts[1])
+	if err != nil {
+		return SubnetAlias{}, fmt.Errorf("无效的目标CIDR: %s (%v)", parts[1], err)
+	}
+	srcPrefix, _ := srcNet.Mask.Size()
+	dstPrefix, _ := dstNet.Mask.Size()
+	if srcPrefix < dstPrefix {
+		return SubnetAlias{}, fmt.Errorf("目标网段必须容纳源网段的所有地址: %s -> %s", srcNet, dstNet)
+	}
+
+	return SubnetAlias{
+		Src: srcNet,
+		Dst: dstNet,
+	}, nil
 }

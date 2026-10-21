@@ -2,7 +2,7 @@ package utils
 
 import (
 	"fmt"
-	"syscall"
+	"os"
 
 	"golang.org/x/term"
 )
@@ -12,7 +12,7 @@ func ReadPasswordFromTerminal(prompt string) (string, error) {
 	fmt.Print(prompt)
 
 	// 禁用回显
-	passwordByte, err := term.ReadPassword(int(syscall.Stdin))
+	passwordByte, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Println() // 换行
 	if err != nil {
 		return "", fmt.Errorf("读取密码失败： %v", err)
@@ -23,8 +23,11 @@ func ReadPasswordFromTerminal(prompt string) (string, error) {
 
 // 获取SSH密码，优先使用配置中的密码，否则则交互式获取密码
 func GetSSHPassword(configPassword string, interactive bool, user, server string) (string, error) {
-	if configPassword != "" && !interactive {
+	if configPassword != "" {
 		return configPassword, nil
+	}
+	if !interactive {
+		return "", fmt.Errorf("未配置SSH密码且未启用交互式认证")
 	}
 
 	// 交互式获取密码

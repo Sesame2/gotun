@@ -1,78 +1,68 @@
-name: Go CI
+name: Go and GUI CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [main, gui]
   pull_request:
-    branches: [ "main" ]
+    branches: [main, gui]
+
+permissions:
+  contents: read
 
 jobs:
-  build-test-lint:
+  core:
     runs-on: ${{ matrix.os }}
-
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          go-version: "1.21"
-
-      - name: Install dependencies
-        run: go mod download
-
-      #####################################################
-      #                 FORMAT CHECK (GOFMT)
-      #####################################################
-      - name: Check code format (gofmt)
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Check formatting
         if: runner.os == 'Linux'
-        run: |
-          echo "Running gofmt..."
-          fmt_output=$(gofmt -l .)
-          if [ -n "$fmt_output" ]; then
-            echo "❌ Some files need formatting:"
-            echo "$fmt_output"
-            exit 1
-          fi
-          echo "✓ gofmt passed"
-
-      #####################################################
-      #                 STATICCHECK
-      #####################################################
-      - name: Install staticcheck
-        if: runner.os == 'Linux'
-        run: go install honnef.co/go/tools/cmd/staticcheck@latest
-
-      - name: Run staticcheck
-        if: runner.os == 'Linux'
-        run: staticcheck ./...
-
-      #####################################################
-      #                 GOLANGCI-LINT
-      #####################################################
-      - name: Install golangci-lint
-        if: runner.os == 'Linux'
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
-            | sh -s -- -b $(go env GOPATH)/bin v1.57.2
-
-      - name: Lint
-        if: runner.os == 'Linux'
-        run: make lint
-
-      #####################################################
-      #                    VET + TEST + BUILD
-      #####################################################
+        run: test -z "$(gofmt -l cmd internal gui/*.go)"
       - name: Vet
-        run: make vet
+        run: go vet ./cmd/... ./internal/...
+      - name: Test with race detection
+        run: go test -race -count=1 -timeout=120s '-coverprofile=coverage.out' ./cmd/... ./internal/...
+      - name: Build CLI
+        run: go build ./cmd/gotun
 
-      # - name: Test
-      #   run: make test
-
-      - name: Build
-        run: make build
+  gui:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            gui/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: gui/frontend/package-lock.json
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.1
+      - name: Generate bindings and install frontend dependencies
+        run: make gui-bindings frontend-install
+      - name: Test frontend
+        working-directory: gui/frontend
+        run: npm run test:coverage
+      - name: Build frontend
+        working-directory: gui/frontend
+        run: npm run build
+      - name: Vet GUI
+        working-directory: gui
+        run: go vet ./...
+      - name: Test GUI with race detection
+        working-directory: gui
+        run: go test -race -count=1 -timeout=120s '-coverprofile=coverage.out' ./...
+      - name: Build native GUI
+        working-directory: gui
+        run: wails build -s -skipbindings -m -nosyncgomod

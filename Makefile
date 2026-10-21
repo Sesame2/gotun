@@ -12,6 +12,8 @@ GOTEST=$(GOCMD) test
 GOMOD=$(GOCMD) mod
 GOVET=$(GOCMD) vet
 GOLINT=golangci-lint
+NPM=npm
+TEST_PACKAGES=./cmd/... ./internal/...
 
 # 系统信息
 GOOS=$(shell go env GOOS)
@@ -20,7 +22,9 @@ GOARCH=$(shell go env GOARCH)
 # 发布平台和架构
 PLATFORMS=linux/amd64 linux/arm64 windows/amd64 windows/arm64 darwin/amd64 darwin/arm64
 
-.PHONY: all build clean test lint vet tidy run help build-all build-release
+.PHONY: all build clean test lint vet tidy run help build-all build-release \
+	gui gui-dev gui-build gui-build-mac gui-build-windows gui-clean \
+	test-race test-coverage test-all test-gui test-frontend gui-bindings gui-generate-bindings frontend-install frontend-build
 
 all: lint test build
 
@@ -96,7 +100,30 @@ clean:
 # 运行测试
 test:
 	@echo "Running tests..."
-	@$(GOTEST) -v ./...
+	@$(GOTEST) -count=1 $(TEST_PACKAGES)
+
+test-race:
+	@$(GOTEST) -race -count=1 $(TEST_PACKAGES)
+
+test-coverage:
+	@mkdir -p $(BUILD_DIR)
+	@$(GOTEST) -race -count=1 -coverprofile=$(BUILD_DIR)/coverage.out $(TEST_PACKAGES)
+	@$(GOCMD) tool cover -func=$(BUILD_DIR)/coverage.out
+
+gui-bindings: gui-generate-bindings
+
+frontend-install: gui-install
+
+frontend-build: gui-bindings frontend-install
+	@cd $(GUI_DIR)/frontend && $(NPM) run build
+
+test-frontend: gui-bindings frontend-install
+	@cd $(GUI_DIR)/frontend && $(NPM) test
+
+test-gui: frontend-build
+	@cd $(GUI_DIR) && $(GOTEST) -race -count=1 ./...
+
+test-all: test test-frontend test-gui
 
 # 运行代码质量检查
 lint:
@@ -110,7 +137,7 @@ lint:
 # 运行静态代码分析
 vet:
 	@echo "Running vet..."
-	@$(GOVET) ./...
+	@$(GOVET) $(TEST_PACKAGES)
 
 # 更新依赖
 tidy:
@@ -128,20 +155,136 @@ version:
 # 显示帮助信息
 help:
 	@echo "Make targets:"
+	@echo ""
+	@echo "CLI 构建:"
 	@echo "  build         - Build gotun binary for current platform"
 	@echo "  build-all     - Build for multiple platforms (amd64 only)"
 	@echo "  build-release - Build release versions for all platforms and architectures"
 	@echo "  package-release - Build and package release files"
 	@echo "  clean         - Remove build artifacts"
 	@echo "  test          - Run tests"
+	@echo "  test-race     - Run core tests with race detection"
+	@echo "  test-coverage - Write core coverage to build/coverage.out"
+	@echo "  test-all      - Test core, frontend and GUI (Wails + Node required)"
+	@echo "  test-gui      - Build frontend and test the GUI Go module"
+	@echo "  test-frontend - Test frontend hooks and page interactions"
 	@echo "  lint          - Run linter"
 	@echo "  vet           - Run go vet"
 	@echo "  tidy          - Tidy go modules"
 	@echo "  run           - Run the application"
 	@echo "  version       - Show current version"
-	@echo "  help          - Show this help"
+	@echo ""
+	@echo "GUI 构建 (Wails):"
+	@echo "  gui           - Build GUI for current platform"
+	@echo "  gui-dev       - Run GUI in development mode with hot reload"
+	@echo "  gui-build     - Build GUI for production"
+	@echo "  gui-build-mac - Build GUI for macOS (universal binary)"
+	@echo "  gui-build-windows - Build GUI for Windows (cross-compile from macOS)"
+	@echo "  gui-build-linux - Build GUI for Linux (requires Linux host)"
+	@echo "  gui-build-all - Build GUI for all platforms"
+	@echo "  gui-package-dmg - Create macOS DMG installer package"
+	@echo "  gui-generate-bindings - Generate Wails bindings"
+	@echo "  gui-clean     - Clean GUI build artifacts"
+	@echo ""
+	@echo "Notes:"
+	@echo "  - Linux GUI must be built on a Linux machine"
+	@echo "  - Windows/macOS can be cross-compiled from macOS"
 	@echo ""
 	@echo "Release workflow:"
 	@echo "  1. Tag your commit: git tag v1.0.0"
 	@echo "  2. Build release:   make build-release"
 	@echo "  3. Package files:   make package-release"
+
+# ========================
+# GUI 构建 (Wails)
+# ========================
+GUI_DIR=gui
+GUI_VERSION=$(VERSION)
+
+# 检查 wails 是否安装
+check-wails:
+	@if ! command -v wails > /dev/null 2>&1; then \
+		echo "Error: wails is not installed. Please install it first:"; \
+		echo "  go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.1"; \
+		exit 1; \
+	fi
+
+# GUI 开发模式
+gui-dev: check-wails
+	@echo "Starting GUI in development mode..."
+	@cd $(GUI_DIR) && wails dev
+
+# GUI 当前平台构建
+gui: check-wails frontend-build
+	@echo "Building GUI for current platform..."
+	@cd $(GUI_DIR) && wails build -s -skipbindings -m -nosyncgomod -ldflags "-X main.Version=$(GUI_VERSION)"
+	@echo "GUI build complete!"
+
+# GUI 生产构建
+gui-build: gui
+
+# 生成绑定文件（跨平台构建前必须先执行）
+gui-generate-bindings: check-wails
+	@echo "Generating Wails bindings..."
+	@mkdir -p $(GUI_DIR)/frontend/dist
+	@test -f $(GUI_DIR)/frontend/dist/index.html || cp $(GUI_DIR)/frontend/index.html $(GUI_DIR)/frontend/dist/index.html
+	@cd $(GUI_DIR) && wails generate module
+
+# macOS 构建 (通用二进制)
+gui-build-mac: check-wails gui-generate-bindings
+	@echo "Building GUI for macOS (universal)..."
+	@cd $(GUI_DIR) && wails build -platform darwin/universal -skipbindings -ldflags "-X main.Version=$(GUI_VERSION)"
+	@echo "macOS GUI build complete: $(GUI_DIR)/build/bin/"
+
+# Windows 构建
+gui-build-windows: check-wails gui-generate-bindings
+	@echo "Building GUI for Windows..."
+	@cd $(GUI_DIR) && wails build -platform windows/amd64 -skipbindings -ldflags "-X main.Version=$(GUI_VERSION)"
+	@echo "Windows GUI build complete: $(GUI_DIR)/build/bin/"
+
+# Linux 构建
+gui-build-linux: check-wails gui-generate-bindings
+	@echo "Building GUI for Linux..."
+	@cd $(GUI_DIR) && wails build -platform linux/amd64 -skipbindings -ldflags "-X main.Version=$(GUI_VERSION)"
+	@echo "Linux GUI build complete: $(GUI_DIR)/build/bin/"
+
+# 构建所有平台 GUI
+gui-build-all: gui-build-mac gui-build-windows gui-build-linux
+	@echo "All GUI builds complete!"
+
+# 清理 GUI 构建产物
+gui-clean:
+	@echo "Cleaning GUI build artifacts..."
+	@rm -rf $(GUI_DIR)/build/bin
+	@rm -rf $(GUI_DIR)/frontend/dist
+	@rm -rf $(GUI_DIR)/frontend/node_modules
+	@echo "GUI clean complete"
+
+# 安装 GUI 前端依赖
+gui-install:
+	@echo "Installing GUI frontend dependencies..."
+	@cd $(GUI_DIR)/frontend && $(NPM) ci --no-audit --no-fund
+	@echo "GUI dependencies installed"
+
+# 创建 macOS DMG 安装包
+gui-package-dmg: gui-build-mac
+	@echo "Creating DMG package for macOS..."
+	@if ! command -v create-dmg > /dev/null 2>&1; then \
+		echo "Installing create-dmg..."; \
+		brew install create-dmg; \
+	fi
+	@mkdir -p $(GUI_DIR)/build/dmg
+	@rm -rf $(GUI_DIR)/build/dmg/GoTun-$(GUI_VERSION).dmg
+	@create-dmg \
+		--volname "GoTun $(GUI_VERSION)" \
+		--volicon "$(GUI_DIR)/build/appicon.png" \
+		--window-pos 200 120 \
+		--window-size 600 400 \
+		--icon-size 100 \
+		--icon "GoTun.app" 175 190 \
+		--hide-extension "GoTun.app" \
+		--app-drop-link 425 190 \
+		--no-internet-enable \
+		"$(GUI_DIR)/build/dmg/GoTun-$(GUI_VERSION).dmg" \
+		"$(GUI_DIR)/build/bin/"
+	@echo "DMG created: $(GUI_DIR)/build/dmg/GoTun-$(GUI_VERSION).dmg"

@@ -1,6 +1,7 @@
 package tun
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -31,17 +32,18 @@ import (
 
 // TunService 管理 TUN 设备和用户态协议栈
 type TunService struct {
-	cfg      *config.Config
-	logger   *logger.Logger
-	ssh      *proxy.SSHClient
-	dev      tun.Device
-	stack    *stack.Stack
-	endpoint *channel.Endpoint
-	tunIP    string
-	tunMask  string
-	peerIP   string
-	routes   []string
-	global   bool
+	cfg       *config.Config
+	logger    *logger.Logger
+	ssh       *proxy.SSHClient
+	dev       tun.Device
+	stack     *stack.Stack
+	endpoint  *channel.Endpoint
+	tunIP     string
+	tunMask   string
+	tunPrefix int
+	peerIP    string
+	routes    []string
+	global    bool
 
 	ifIndex int // [新增] 用于存储 Wintun 网卡的接口索引
 
@@ -62,21 +64,21 @@ func NewTunService(cfg *config.Config, log *logger.Logger, sshClient *proxy.SSHC
 
 	// 计算 Mask
 	mask := net.IP(ipNet.Mask).String()
+	prefix, _ := ipNet.Mask.Size()
 
 	// 计算 Peer IP (简单起见，IP+1)
-	peerIP := make(net.IP, len(tunIP))
-	copy(peerIP, tunIP)
-	peerIP[3]++ // +1
+	peerIP := ipAdd(tunIP, 1)
 
 	return &TunService{
-		cfg:     cfg,
-		logger:  log,
-		ssh:     sshClient,
-		tunIP:   tunIP.String(),
-		tunMask: mask, // 内部仍使用 mask 字符串
-		peerIP:  peerIP.String(),
-		routes:  cfg.TunRoute,
-		global:  cfg.TunGlobal,
+		cfg:       cfg,
+		logger:    log,
+		ssh:       sshClient,
+		tunIP:     tunIP.String(),
+		tunMask:   mask, // 内部仍使用 mask 字符串
+		tunPrefix: prefix,
+		peerIP:    peerIP.String(),
+		routes:    cfg.TunRoute,
+		global:    cfg.TunGlobal,
 	}, nil
 }
 
@@ -181,6 +183,9 @@ func (t *TunService) Close() error {
 		if t.dev != nil {
 			t.dev.Close()
 		}
+		if t.endpoint != nil {
+			t.endpoint.Close()
+		}
 		if t.stack != nil {
 			t.stack.Close()
 		}
@@ -208,7 +213,7 @@ func (t *TunService) initNetstack() {
 		Protocol: ipv4.ProtocolNumber,
 		AddressWithPrefix: tcpip.AddressWithPrefix{
 			Address:   addr,
-			PrefixLen: 24, // 对应 255.255.255.0
+			PrefixLen: t.tunPrefix,
 		},
 	}
 	if err := s.AddProtocolAddress(1, protocolAddr, stack.AddressProperties{}); err != nil {
@@ -398,6 +403,7 @@ func (t *TunService) pumpTunToStack() {
 				Payload: buffer.MakeWithData(data),
 			})
 			t.endpoint.InjectInbound(header.IPv4ProtocolNumber, packetBuf)
+			packetBuf.DecRef()
 		}
 	}
 }
@@ -410,17 +416,18 @@ func (t *TunService) pumpStackToTun() {
 	}
 
 	for {
-		pkt := t.endpoint.Read()
+		pkt := t.endpoint.ReadContext(context.Background())
 		if pkt == nil {
-			continue
+			return
 		}
-		views := pkt.ToView().ToSlice()
+		view := pkt.ToView()
 		pkt.DecRef()
 
 		// WireGuard Write 也是 batch 接口
 		// 我们需要为 offset 预留空间
-		buf := make([]byte, offset+len(views))
-		copy(buf[offset:], views)
+		buf := make([]byte, offset+view.Size())
+		copy(buf[offset:], view.AsSlice())
+		view.Release()
 
 		_, err := t.dev.Write([][]byte{buf}, offset)
 		if err != nil {
@@ -442,7 +449,7 @@ func (t *TunService) setupTunIP(devName string) error {
 	case "darwin":
 		cmd = exec.Command("ifconfig", devName, t.tunIP, t.peerIP, "up")
 	case "linux":
-		err := exec.Command("ip", "addr", "add", fmt.Sprintf("%s/24", t.tunIP), "dev", devName).Run()
+		err := exec.Command("ip", "addr", "add", fmt.Sprintf("%s/%d", t.tunIP, t.tunPrefix), "dev", devName).Run()
 		if err != nil {
 			return err
 		}

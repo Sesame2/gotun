@@ -108,7 +108,7 @@ make build
 
 #### 使用 go install 安装
 
-Go 1.17 及以上版本可直接通过以下命令安装：
+Go 1.25.5 及以上版本可直接通过以下命令安装：
 
 ```bash
 go install github.com/Sesame2/gotun/cmd/gotun@latest
