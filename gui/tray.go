@@ -79,7 +79,9 @@ func (a *App) traySnapshot() trayState {
 	return trayState{language: settings.Language, profiles: a.GetProfiles(), activeID: active, running: running, busy: a.actionBusy.Load(), mode: settings.SystemProxyMode, errorMessage: message}
 }
 
-func (a *App) startTray(ctx context.Context) { a.trayInit.Do(func() { a.initTray(ctx) }) }
+func (a *App) startTray(ctx context.Context) {
+	a.trayInit.Do(func() { a.initTray(ctx); a.acknowledgeElevation() })
+}
 func (a *App) initTray(ctx context.Context) {
 	native := tray.New()
 	if err := native.Start(a.handleTrayAction); err != nil {
@@ -160,15 +162,19 @@ func (a *App) handleTrayAction(id string) {
 	}
 	a.refreshTray()
 	if err != nil {
-		a.AddLog("ERROR", err.Error())
-		if a.ctx != nil && !a.quitting.Load() {
-			a.ShowWindow()
-			title := "GoTun 操作失败"
-			if a.GetSettings().Language == "en-US" {
-				title = "GoTun action failed"
-			}
-			wailsRuntime.MessageDialog(a.ctx, wailsRuntime.MessageDialogOptions{Type: wailsRuntime.ErrorDialog, Title: title, Message: err.Error()})
+		a.showActionError(err)
+	}
+}
+
+func (a *App) showActionError(err error) {
+	a.AddLog("ERROR", err.Error())
+	if a.ctx != nil && !a.quitting.Load() {
+		a.ShowWindow()
+		title := "GoTun 操作失败"
+		if a.GetSettings().Language == "en-US" {
+			title = "GoTun action failed"
 		}
+		_, _ = wailsRuntime.MessageDialog(a.ctx, wailsRuntime.MessageDialogOptions{Type: wailsRuntime.ErrorDialog, Title: title, Message: err.Error()})
 	}
 }
 
@@ -185,6 +191,7 @@ func (a *App) setActiveProfile(id string, tun bool) {
 }
 
 func (a *App) selectTrayProfile(id string) error {
+	a.cancelConnections()
 	a.beginAction()
 	defer a.endAction()
 	if a.quitting.Load() {
@@ -222,6 +229,7 @@ func (a *App) stopAllProxiesLocked() error {
 	return errors.Join(a.stopTunProxy(), a.stopProxy())
 }
 func (a *App) stopAllProxies() error {
+	a.cancelConnections()
 	a.beginAction()
 	defer a.endAction()
 	return a.stopAllProxiesLocked()
@@ -278,6 +286,12 @@ func (a *App) beforeClose(ctx context.Context) bool {
 	if a.shouldHideOnClose() {
 		wailsRuntime.WindowHide(ctx)
 		return true
+	}
+	if !a.quitting.Load() {
+		if err := a.prepareQuit(); err != nil {
+			a.showActionError(err)
+			return true
+		}
 	}
 	return false
 }

@@ -6,6 +6,8 @@ import (
 	"github.com/Sesame2/gotun/internal/logger"
 	"github.com/Sesame2/gotun/internal/testutil"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +17,7 @@ type fakeSystemProxy struct {
 	disableFailure            error
 	mu                        sync.Mutex
 	enabled                   bool
+	pending                   bool
 	failure                   error
 	clears, enables, disables int
 }
@@ -27,6 +30,7 @@ func (m *fakeSystemProxy) Enable() error {
 		return m.failure
 	}
 	m.enabled = true
+	m.pending = true
 	return nil
 }
 func (m *fakeSystemProxy) Disable() error {
@@ -40,6 +44,7 @@ func (m *fakeSystemProxy) Disable() error {
 		return m.failure
 	}
 	m.enabled = false
+	m.pending = false
 	return nil
 }
 func (m *fakeSystemProxy) Clear() error {
@@ -50,8 +55,15 @@ func (m *fakeSystemProxy) Clear() error {
 		return m.failure
 	}
 	m.enabled = false
+	m.pending = false
 	return nil
 }
+func (m *fakeSystemProxy) NeedsCleanup() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.enabled || m.pending
+}
+
 func (m *fakeSystemProxy) IsEnabled() bool { m.mu.Lock(); defer m.mu.Unlock(); return m.enabled }
 
 func TestSystemProxyControlAndActualStatus(t *testing.T) {
@@ -214,5 +226,56 @@ func TestRestartCannotLosePendingSystemProxyCleanup(t *testing.T) {
 	}
 	if creations != 1 || pending.enabled || s.proxyMgr != next || s.GetStatus().SystemProxy {
 		t.Fatal("successful cleanup did not permit manual restart")
+	}
+}
+
+func TestPendingRollbackWithoutEnabledFlagSurvivesStopAndRestart(t *testing.T) {
+	failure := errors.New("pending restore denied")
+	fake := &fakeSystemProxy{pending: true, disableFailure: failure}
+	s := NewProxyService()
+	s.proxyMgr = fake
+	s.newSystemProxy = func(*logger.Logger, string, string) systemProxyManager {
+		t.Fatal("replaced pending snapshot")
+		return nil
+	}
+	if !errors.Is(s.Stop(), failure) {
+		t.Fatal("Stop ignored a pending rollback when enabled=false")
+	}
+	if !errors.Is(s.Start(), failure) {
+		t.Fatal("Start discarded pending rollback")
+	}
+	if s.GetStatus().SystemProxy {
+		t.Fatal("pending rollback falsely reported an enabled proxy")
+	}
+	fake.disableFailure = nil
+	if err := s.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if fake.NeedsCleanup() {
+		t.Fatal("Stop did not retry pending rollback")
+	}
+}
+
+func TestProxyVerboseChangeRetainsLoggerFileAndCallback(t *testing.T) {
+	s := NewProxyService()
+	path := filepath.Join(t.TempDir(), "proxy.log")
+	if err := s.SetLogFile(path); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.logger.Close() })
+	var messages []string
+	s.SetLogCallback(func(_ string, message string) { messages = append(messages, message) })
+	activeLogger := s.logger
+	s.SetVerbose(true)
+	activeLogger.Debug("retained-debug")
+	s.SetVerbose(false)
+	activeLogger.Debug("must-be-filtered")
+	s.logger.Info("retained-info")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.logger != activeLogger || !strings.Contains(string(data), "retained-debug") || !strings.Contains(string(data), "retained-info") || strings.Contains(string(data), "must-be-filtered") || len(messages) != 2 {
+		t.Fatalf("verbosity lost logger identity, output or callback: file=%q messages=%v", data, messages)
 	}
 }

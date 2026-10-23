@@ -44,6 +44,7 @@ type systemProxyManager interface {
 	Enable() error
 	Disable() error
 	Clear() error
+	NeedsCleanup() bool
 	IsEnabled() bool
 }
 
@@ -107,13 +108,7 @@ func (s *ProxyService) GetConfig() *config.Config {
 func (s *ProxyService) SetVerbose(verbose bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// 保存当前的 callback
-	oldCallback := s.logger.GetCallback()
-	s.logger = logger.NewLogger(verbose)
-	// 恢复 callback
-	if oldCallback != nil {
-		s.logger.SetCallback(oldCallback)
-	}
+	s.logger.SetVerbose(verbose)
 }
 
 // SetLogFile 设置日志文件
@@ -172,7 +167,7 @@ func (s *ProxyService) start(cfg *config.Config) error {
 	pending := s.proxyMgr
 	s.mu.Unlock()
 	// Preserve tracking until cleanup of the previous OS integration succeeds.
-	if pending != nil && pending.IsEnabled() {
+	if pending != nil && pending.NeedsCleanup() {
 		if err := pending.Disable(); err != nil {
 			failure := fmt.Errorf("清理上次系统代理失败: %w", err)
 			s.setError(failure.Error())
@@ -224,7 +219,7 @@ func (s *ProxyService) start(cfg *config.Config) error {
 	if err != nil {
 		errMsg := fmt.Sprintf("SSH连接失败: %v", err)
 		s.setError(errMsg)
-		return fmt.Errorf("%s", errMsg)
+		return fmt.Errorf("SSH连接失败: %w", err)
 	}
 	s.sshClient = sshClient
 
@@ -259,7 +254,7 @@ func (s *ProxyService) start(cfg *config.Config) error {
 	if s.cfg.SystemProxy {
 		if err := mgr.Enable(); err != nil {
 			failure := fmt.Errorf("设置系统代理失败: %w", err)
-			if mgr.IsEnabled() {
+			if mgr.NeedsCleanup() {
 				failure = errors.Join(failure, mgr.Disable())
 			}
 			if s.httpProxy != nil {
@@ -316,7 +311,7 @@ func (s *ProxyService) Stop() error {
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
 	s.mu.Lock()
-	if s.status == StatusStopped && (s.proxyMgr == nil || !s.proxyMgr.IsEnabled()) {
+	if s.status == StatusStopped && (s.proxyMgr == nil || !s.proxyMgr.NeedsCleanup()) {
 		s.mu.Unlock()
 		return nil
 	}

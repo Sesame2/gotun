@@ -18,7 +18,7 @@ func validConfig() *config.Config {
 
 func TestNewConfigDefaults(t *testing.T) {
 	cfg := config.NewConfig()
-	if cfg.ListenAddr != ":8080" || cfg.SSHPort != "22" || cfg.Timeout != 10*time.Second {
+	if cfg.ListenAddr != "127.0.0.1:8080" || cfg.SSHPort != "22" || cfg.Timeout != 10*time.Second {
 		t.Fatalf("unexpected connection defaults: %+v", cfg)
 	}
 	if !cfg.InteractiveAuth || !cfg.SystemProxy || cfg.TunMode || cfg.TunGlobal || cfg.Verbose {

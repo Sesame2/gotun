@@ -18,6 +18,7 @@ var (
 )
 
 func main() {
+	prepareElevationHome()
 	// Create an instance of the app structure
 	app := NewApp()
 

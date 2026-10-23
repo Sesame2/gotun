@@ -1,19 +1,63 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Sesame2/gotun/internal/logger"
 	"github.com/Sesame2/gotun/internal/testutil"
 )
+
+type failedSystemProxy struct{}
+
+func (failedSystemProxy) Enable() error   { return errors.New("synthetic proxy enable failed") }
+func (failedSystemProxy) Disable() error  { return errors.New("synthetic proxy restore failed") }
+func (failedSystemProxy) IsEnabled() bool { return false }
+
+func TestCLISystemProxyFailureReturnsBothErrors(t *testing.T) {
+	server := testutil.NewSSHServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCLIProcess$", "--", "--known-hosts", server.KnownHostsFile, "--identity_file", server.KeyFile, "--http", testutil.AvailableAddr(t), "tester@"+server.Addr)
+	cmd.Env = append(os.Environ(), "GOTUN_CLI_TEST_PROCESS=1", "GOTUN_CLI_TEST_PROXY_FAILURE=1")
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() != nil || err == nil || !strings.Contains(string(output), "synthetic proxy enable failed") || !strings.Contains(string(output), "synthetic proxy restore failed") {
+		t.Fatalf("CLI must fail on OS proxy setup and report rollback failure: err=%v timeout=%v output=%s", err, ctx.Err(), output)
+	}
+	if !strings.Contains(string(output), "GoTun test-version") {
+		t.Fatalf("startup log does not use the compiled version: %s", output)
+	}
+}
+
+func TestCLIKnownHostsFlagUsesSpecifiedFile(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "known_hosts")
+	if err := os.WriteFile(path, []byte("invalid host key file\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"-test.run=^TestCLIProcess$", "--", "--known-hosts", path, "--identity_file", filepath.Join(home, "missing-key"), "--pass", "synthetic", "--sys-proxy=false", "tester@127.0.0.1:22"}
+	cmd := exec.Command(os.Args[0], args...)
+	cmd.Env = append(os.Environ(), "GOTUN_CLI_TEST_PROCESS=1", "HOME="+home, "USERPROFILE="+home)
+	output, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "read SSH known_hosts "+path) {
+		t.Fatalf("CLI did not validate explicitly selected trust file: err=%v output=%s", err, output)
+	}
+}
 
 // Each invocation gets Cobra's real argument parsing and a fresh global config.
 func TestCLIProcess(t *testing.T) {
 	if os.Getenv("GOTUN_CLI_TEST_PROCESS") != "1" {
 		return
+	}
+	if os.Getenv("GOTUN_CLI_TEST_PROXY_FAILURE") == "1" {
+		newSystemProxy = func(*logger.Logger, string, string) systemProxyManager { return failedSystemProxy{} }
 	}
 	for i, arg := range os.Args {
 		if arg == "--" {
@@ -33,6 +77,8 @@ func TestCLICommands(t *testing.T) {
 		fail bool
 	}{
 		{"help", []string{"--help"}, "gotun [user@host]", false},
+		{"private listener default", []string{"--help"}, "127.0.0.1:8080", false},
+		{"host trust option", []string{"--help"}, "--known-hosts", false},
 		{"version", []string{"--version"}, "test-version", false},
 		{"missing target", nil, "accepts 1 arg(s), received 0", true},
 		{"extra targets", []string{"u@h", "u@h2"}, "accepts 1 arg(s), received 2", true},

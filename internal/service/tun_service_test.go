@@ -1,9 +1,12 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,7 +14,99 @@ import (
 	"github.com/Sesame2/gotun/internal/logger"
 	"github.com/Sesame2/gotun/internal/proxy"
 	"github.com/Sesame2/gotun/internal/testutil"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
+
+func TestTunLoggingSettingsKeepFileAndEmitCallbackOnce(t *testing.T) {
+	service := NewTunService()
+	path := filepath.Join(t.TempDir(), "tun.log")
+	if err := service.SetLogFile(path); err != nil {
+		t.Fatal(err)
+	}
+	calls := map[string]int{}
+	service.SetLogCallback(func(level, message string) { calls[level+":"+message]++ })
+	service.SetVerbose(true)
+	service.log("DEBUG", "visible debug")
+	service.log("INFO", "visible info")
+	service.SetVerbose(false)
+	service.log("DEBUG", "hidden debug")
+	if err := service.SetLogFile(""); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "visible debug") || !strings.Contains(string(data), "visible info") || strings.Contains(string(data), "hidden debug") {
+		t.Fatalf("logging settings lost output: %s", data)
+	}
+	if calls["DEBUG:visible debug"] != 1 || calls["INFO:visible info"] != 1 || calls["DEBUG:hidden debug"] != 0 {
+		t.Fatalf("callback duplicated or ignored verbosity: %v", calls)
+	}
+}
+
+func TestTunStartSnapshotsConfigurationAndPreservesSSHPolicy(t *testing.T) {
+	server := testutil.NewSSHServer(t)
+	service := NewTunService()
+	service.needsElevation = func() bool { return false }
+	tunCfg := &TunConfig{TunMode: true, TunCIDR: "10.0.0.1/24", TunRoutes: []string{"203.0.113.0/24"}}
+	fullCfg := server.Config()
+	ctx := context.WithValue(context.Background(), struct{}{}, "policy")
+	fullCfg.Context = ctx
+	fullCfg.HostKeyPrompt = func(string, string) bool { return true }
+	service.SetConfig(tunCfg)
+	service.SetFullConfig(fullCfg)
+	service.newNative = func(cfg *config.Config, _ *logger.Logger, _ *proxy.SSHClient) (nativeTun, error) {
+		if cfg.SSHServer != server.Addr || cfg.KnownHostsFile != server.KnownHostsFile || cfg.Context != ctx || cfg.HostKeyPrompt == nil || !cfg.HostKeyPrompt("fixture", "fingerprint") {
+			t.Fatal("snapshot lost SSH endpoint, trust policy or context")
+		}
+		return &fakeNativeTun{}, nil
+	}
+	tunCfg.TunRoutes[0] = "mutated"
+	fullCfg.SSHServer = "127.0.0.1:0"
+	if err := service.Start(); err != nil {
+		t.Fatalf("caller mutation changed startup snapshot: %v", err)
+	}
+	t.Cleanup(func() { _ = service.Stop() })
+	status := service.GetStatus()
+	status.Routes[0] = "mutated stats"
+	if got := service.GetStatus().Routes[0]; got != "203.0.113.0/24" {
+		t.Fatalf("GetStatus leaked mutable routes: %q", got)
+	}
+}
+
+func TestTunConfigRejectsUnsupportedAddressesAndNarrowNAT(t *testing.T) {
+	for _, cfg := range []TunConfig{
+		{TunMode: true, TunCIDR: "2001:db8::1/64"},
+		{TunMode: true, TunCIDR: "::ffff:10.0.0.1/120"},
+		{TunMode: true, TunRoutes: []string{"2001:db8::/64"}},
+		{TunMode: true, TunNAT: []TunNATRule{{SrcCIDR: "10.0.0.0/16", DstCIDR: "192.0.2.0/24"}}},
+	} {
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("accepted unusable TUN configuration: %+v", cfg)
+		}
+	}
+}
+
+func TestTunStartupPreservesSSHErrorIdentity(t *testing.T) {
+	t.Run("cancelled startup", func(t *testing.T) {
+		service := tunServiceWithFake(t, &fakeNativeTun{})
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		service.fullCfg.Context = ctx
+		if err := service.Start(); !errors.Is(err, context.Canceled) {
+			t.Fatalf("SSH cancellation lost its cause: %v", err)
+		}
+	})
+	t.Run("unknown host key", func(t *testing.T) {
+		service := tunServiceWithFake(t, &fakeNativeTun{})
+		service.fullCfg.KnownHostsFile = filepath.Join(t.TempDir(), "unknown_hosts")
+		var identity *knownhosts.KeyError
+		if err := service.Start(); !errors.As(err, &identity) {
+			t.Fatalf("SSH identity error lost its cause: %v", err)
+		}
+	})
+}
 
 func TestNewTunService(t *testing.T) {
 	svc := NewTunService()

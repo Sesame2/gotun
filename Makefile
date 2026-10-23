@@ -1,5 +1,6 @@
 BINARY_NAME=gotun
-VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+PYTHON?=python3
+VERSION?=$(shell $(PYTHON) scripts/release.py version)
 BUILD_DIR=./build
 LDFLAGS=-ldflags "-X main.Version=$(VERSION) -s -w"
 MAIN_PACKAGE=./cmd/gotun
@@ -53,42 +54,11 @@ build-darwin:
 	@mkdir -p $(BUILD_DIR)
 	@GOOS=darwin GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)_darwin_amd64 $(MAIN_PACKAGE)
 
-# 发布构建 - 支持多架构
+# The draft workflow adds signed GUI packages and checksums to these CLI archives.
 build-release:
-	@echo "Building release for version: $(VERSION)"
-	@mkdir -p $(BUILD_DIR)
-	@for platform in $(PLATFORMS); do \
-	    os=$$(echo $$platform | cut -d'/' -f1); \
-	    arch=$$(echo $$platform | cut -d'/' -f2); \
-	    echo "Building $$os/$$arch..."; \
-	    if [ "$$os" = "windows" ]; then \
-	        GOOS=$$os GOARCH=$$arch $(GOBUILD) $(LDFLAGS) \
-	            -o $(BUILD_DIR)/$(BINARY_NAME)_$(VERSION)_$${os}_$${arch}.exe $(MAIN_PACKAGE); \
-	    else \
-	        GOOS=$$os GOARCH=$$arch $(GOBUILD) $(LDFLAGS) \
-	            -o $(BUILD_DIR)/$(BINARY_NAME)_$(VERSION)_$${os}_$${arch} $(MAIN_PACKAGE); \
-	    fi; \
-	done
-	@echo "Release build complete for version: $(VERSION)"
-	@echo "Built files:"
-	@ls -la $(BUILD_DIR)/$(BINARY_NAME)_$(VERSION)_*
+	@$(PYTHON) scripts/release.py build-cli --version "$(VERSION)" --out "$(BUILD_DIR)/release"
 
-# 打包发布文件
 package-release: build-release
-	@echo "Packaging release files..."
-	@cd $(BUILD_DIR) && \
-	for file in $(BINARY_NAME)_$(VERSION)_*; do \
-	    if [ -f "$$file" ]; then \
-	        os_arch=$$(echo $$file | sed 's/$(BINARY_NAME)_$(VERSION)_//'); \
-	        if [[ "$$file" == *.exe ]]; then \
-	            zip "$$file.zip" "$$file"; \
-	        else \
-	            tar -czf "$$file.tar.gz" "$$file"; \
-	        fi; \
-	        echo "Packaged: $$file"; \
-	    fi; \
-	done
-	@echo "Packaging complete"
 
 # 清理构建文件
 clean:
@@ -199,13 +169,13 @@ help:
 # GUI 构建 (Wails)
 # ========================
 GUI_DIR=gui
-GUI_VERSION=$(VERSION)
+WAILS_VERSION=$(shell cd $(GUI_DIR) && $(GOCMD) list -m -f '{{.Version}}' github.com/wailsapp/wails/v2)
 
 # 检查 wails 是否安装
 check-wails:
 	@if ! command -v wails > /dev/null 2>&1; then \
 		echo "Error: wails is not installed. Please install it first:"; \
-		echo "  go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.1"; \
+		echo "  go install github.com/wailsapp/wails/v2/cmd/wails@$(WAILS_VERSION)"; \
 		exit 1; \
 	fi
 
@@ -217,7 +187,7 @@ gui-dev: check-wails
 # GUI 当前平台构建
 gui: check-wails frontend-build
 	@echo "Building GUI for current platform..."
-	@cd $(GUI_DIR) && wails build -s -skipbindings -m -nosyncgomod -ldflags "-X main.Version=$(GUI_VERSION)"
+	@$(PYTHON) scripts/release.py build-gui --version "$(VERSION)" --platform "$(GOOS)/$(GOARCH)"
 	@echo "GUI build complete!"
 
 # GUI 生产构建
@@ -231,21 +201,21 @@ gui-generate-bindings: check-wails
 	@cd $(GUI_DIR) && wails generate module
 
 # macOS 构建 (通用二进制)
-gui-build-mac: check-wails gui-generate-bindings
+gui-build-mac: check-wails frontend-build
 	@echo "Building GUI for macOS (universal)..."
-	@cd $(GUI_DIR) && wails build -platform darwin/universal -skipbindings -ldflags "-X main.Version=$(GUI_VERSION)"
+	@$(PYTHON) scripts/release.py build-gui --version "$(VERSION)" --platform darwin/universal
 	@echo "macOS GUI build complete: $(GUI_DIR)/build/bin/"
 
 # Windows 构建
-gui-build-windows: check-wails gui-generate-bindings
+gui-build-windows: check-wails frontend-build
 	@echo "Building GUI for Windows..."
-	@cd $(GUI_DIR) && wails build -platform windows/amd64 -skipbindings -ldflags "-X main.Version=$(GUI_VERSION)"
+	@$(PYTHON) scripts/release.py build-gui --version "$(VERSION)" --platform windows/amd64
 	@echo "Windows GUI build complete: $(GUI_DIR)/build/bin/"
 
 # Linux 构建
-gui-build-linux: check-wails gui-generate-bindings
+gui-build-linux: check-wails frontend-build
 	@echo "Building GUI for Linux..."
-	@cd $(GUI_DIR) && wails build -platform linux/amd64 -skipbindings -ldflags "-X main.Version=$(GUI_VERSION)"
+	@$(PYTHON) scripts/release.py build-gui --version "$(VERSION)" --platform linux/amd64
 	@echo "Linux GUI build complete: $(GUI_DIR)/build/bin/"
 
 # 构建所有平台 GUI
@@ -274,9 +244,9 @@ gui-package-dmg: gui-build-mac
 		brew install create-dmg; \
 	fi
 	@mkdir -p $(GUI_DIR)/build/dmg
-	@rm -rf $(GUI_DIR)/build/dmg/GoTun-$(GUI_VERSION).dmg
+	@rm -rf $(GUI_DIR)/build/dmg/GoTun-$(VERSION).dmg
 	@create-dmg \
-		--volname "GoTun $(GUI_VERSION)" \
+		--volname "GoTun $(VERSION)" \
 		--volicon "$(GUI_DIR)/build/bin/GoTun.app/Contents/Resources/iconfile.icns" \
 		--window-pos 200 120 \
 		--window-size 600 400 \
@@ -285,6 +255,6 @@ gui-package-dmg: gui-build-mac
 		--hide-extension "GoTun.app" \
 		--app-drop-link 425 190 \
 		--no-internet-enable \
-		"$(GUI_DIR)/build/dmg/GoTun-$(GUI_VERSION).dmg" \
+		"$(GUI_DIR)/build/dmg/GoTun-$(VERSION).dmg" \
 		"$(GUI_DIR)/build/bin/"
-	@echo "DMG created: $(GUI_DIR)/build/dmg/GoTun-$(GUI_VERSION).dmg"
+	@echo "DMG created: $(GUI_DIR)/build/dmg/GoTun-$(VERSION).dmg"

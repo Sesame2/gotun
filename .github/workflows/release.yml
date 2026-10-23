@@ -1,0 +1,157 @@
+name: Prepare draft release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable version tag, such as v1.0.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+      - id: version
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          git show-ref --verify "refs/tags/$TAG"
+          version=$(python3 scripts/release.py version --version "$TAG")
+          test "$version" != dev && test "$version" = "$TAG"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Require macOS signing and notarization credentials
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: python3 scripts/release.py check-signing
+      - run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
+
+  cli:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test -race -count=1 -timeout=120s ./cmd/... ./internal/...
+      - run: python3 scripts/release.py build-cli --version "$VERSION" --out dist
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli
+          path: dist/*
+          if-no-files-found: error
+
+  gui:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: darwin/universal
+            artifact: gui-macos
+          - os: windows-latest
+            platform: windows/amd64
+            artifact: gui-windows
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: gui/frontend/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install matching Wails CLI
+        shell: bash
+        run: |
+          version=$(cd gui && go list -m -f '{{.Version}}' github.com/wailsapp/wails/v2)
+          go install "github.com/wailsapp/wails/v2/cmd/wails@$version"
+      - run: make frontend-build
+      - run: npm run test:coverage
+        working-directory: gui/frontend
+      - run: go test -race -count=1 -timeout=120s ./cmd/... ./internal/...
+      - run: go test -race -count=1 -timeout=120s ./...
+        working-directory: gui
+      - name: Build versioned GUI
+        shell: bash
+        run: python scripts/release.py build-gui --version "$VERSION" --platform "${{ matrix.platform }}"
+      - name: Sign, notarize and staple macOS app
+        if: runner.os == 'macOS'
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: python scripts/release.py sign-mac --version "$VERSION" --out dist
+      - name: Package Windows app
+        if: runner.os == 'Windows'
+        shell: bash
+        run: python scripts/release.py pack-windows --version "$VERSION" --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/*
+          if-no-files-found: error
+
+  draft:
+    needs: [validate, cli, gui]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Verify complete artifact set and write SHA256SUMS
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: python3 scripts/release.py manifest --version "$VERSION" --out dist
+      - name: Create draft for manual review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "Release already exists; refusing to replace it."
+            exit 1
+          fi
+          gh release create "$VERSION" dist/* --verify-tag --draft --title "GoTun $VERSION" --generate-notes

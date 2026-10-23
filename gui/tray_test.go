@@ -4,6 +4,7 @@ import (
 	"github.com/Sesame2/gotun/gui/internal/tray"
 	"github.com/Sesame2/gotun/internal/testutil"
 	"net"
+	"os"
 	"strings"
 	"testing"
 
@@ -95,6 +96,7 @@ func TestTrayInvalidSelectionPreservesRunningProxy(t *testing.T) {
 func addLocalTrayProfile(t *testing.T, a *App, id string) service.SSHProfile {
 	t.Helper()
 	server := testutil.NewSSHServer(t)
+	testutil.TrustKnownHosts(t, os.Getenv("HOME"), server)
 	cfg := server.Config()
 	host, port, err := net.SplitHostPort(cfg.SSHServer)
 	if err != nil {

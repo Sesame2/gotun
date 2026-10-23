@@ -74,11 +74,138 @@ func TestConfigDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	profile := svc.GetProfiles()[0]
-	if profile.ID == "" || profile.Port != "22" || profile.HTTPAddr != ":8080" {
+	if profile.ID == "" || profile.Port != "22" || profile.HTTPAddr != "127.0.0.1:8080" {
 		t.Fatalf("unexpected profile defaults: %+v", profile)
 	}
 	if profile.CreatedAt.IsZero() || !profile.CreatedAt.Equal(profile.UpdatedAt) || !profile.LastUsedAt.IsZero() {
 		t.Fatalf("unexpected new profile timestamps: %+v", profile)
+	}
+}
+
+func TestConfigRejectsStaleInstanceWithoutLosingProfiles(t *testing.T) {
+	first := newTestConfigService(t)
+	second := reloadConfigService(t)
+	if err := first.AddProfile(SSHProfile{ID: "new", Name: "Keep this profile"}); err != nil {
+		t.Fatal(err)
+	}
+	previous := second.GetSettings()
+	next := previous
+	next.Theme = "light"
+	if err := second.UpdateSettings(next); err == nil {
+		t.Fatal("a stale instance overwrote a newer configuration")
+	}
+	if second.GetSettings() != previous {
+		t.Fatal("rejected save changed in-memory settings")
+	}
+	reloaded := reloadConfigService(t)
+	if _, err := reloaded.GetProfile("new"); err != nil {
+		t.Fatalf("stale save lost the other instance's profile: %v", err)
+	}
+	if err := second.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.UpdateSettings(next); err != nil {
+		t.Fatalf("save after explicitly reloading should work: %v", err)
+	}
+}
+
+func TestFailedProfileMutationsNeverLeakIntoLaterSave(t *testing.T) {
+	for _, operation := range []string{"add", "update", "delete", "last used"} {
+		t.Run(operation, func(t *testing.T) {
+			svc := newTestConfigService(t)
+			if err := svc.AddProfile(testProfile()); err != nil {
+				t.Fatal(err)
+			}
+			before := svc.GetProfiles()
+			persistedBefore := reloadConfigService(t).GetProfiles()
+			path := svc.configPath
+			svc.configPath = t.TempDir()
+			var err error
+			switch operation {
+			case "add":
+				err = svc.AddProfile(SSHProfile{ID: "failed"})
+			case "update":
+				changed := before[0]
+				changed.Name = "Must not persist"
+				err = svc.UpdateProfile(changed)
+			case "delete":
+				err = svc.DeleteProfile(before[0].ID)
+			case "last used":
+				err = svc.SetLastUsed(before[0].ID)
+			}
+			if err == nil {
+				t.Fatal("save over a directory unexpectedly succeeded")
+			}
+			if !reflect.DeepEqual(svc.GetProfiles(), before) {
+				t.Fatal("failed save changed observable profiles")
+			}
+			svc.configPath = path
+			settings := svc.GetSettings()
+			settings.Language = "en-US"
+			if err := svc.UpdateSettings(settings); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(reloadConfigService(t).GetProfiles(), persistedBefore) {
+				t.Fatal("later save persisted a rejected profile change")
+			}
+		})
+	}
+}
+
+func TestConfigSaveAtomicallyReplacesPrivateFile(t *testing.T) {
+	svc := newTestConfigService(t)
+	if err := svc.AddProfile(testProfile()); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(svc.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := svc.GetSettings()
+	settings.Theme = "light"
+	if err := svc.UpdateSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(svc.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(before, after) {
+		t.Fatal("save modified the original file instead of atomically replacing it")
+	}
+	if got := reloadConfigService(t).GetSettings(); got != settings {
+		t.Fatalf("replacement did not persist settings: %+v", got)
+	}
+	leftovers, err := filepath.Glob(filepath.Join(filepath.Dir(svc.configPath), ".config-*.tmp"))
+	if err != nil || len(leftovers) != 0 {
+		t.Fatalf("temporary credential files left behind: %v, %v", leftovers, err)
+	}
+}
+
+func TestConcurrentConfigInstancesCannotOverwriteEachOther(t *testing.T) {
+	for iteration := 0; iteration < 20; iteration++ {
+		t.Run(fmt.Sprint(iteration), func(t *testing.T) {
+			first := newTestConfigService(t)
+			second := reloadConfigService(t)
+			start := make(chan struct{})
+			results := make(chan error, 2)
+			for i, svc := range []*ConfigService{first, second} {
+				go func(i int, svc *ConfigService) {
+					<-start
+					results <- svc.AddProfile(SSHProfile{ID: fmt.Sprint(i)})
+				}(i, svc)
+			}
+			close(start)
+			successes := 0
+			for i := 0; i < 2; i++ {
+				if <-results == nil {
+					successes++
+				}
+			}
+			if successes != 1 || len(reloadConfigService(t).GetProfiles()) != 1 {
+				t.Fatalf("concurrent stale saves must preserve exactly one successful change; successes=%d", successes)
+			}
+		})
 	}
 }
 
@@ -317,6 +444,9 @@ func TestConfigCredentialsArePrivate(t *testing.T) {
 				if err := os.Chmod(svc.configPath, 0644); err != nil {
 					t.Fatal(err)
 				}
+				if err := svc.Load(); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if err := svc.AddProfile(testProfile()); err != nil {
 				t.Fatal(err)
@@ -329,6 +459,45 @@ func TestConfigCredentialsArePrivate(t *testing.T) {
 				t.Fatalf("config containing SSH passwords has mode %04o, want 0600", got)
 			}
 		})
+	}
+}
+
+func TestConfigDirectoryAndLockArePrivateAndRejectSymlinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX filesystem permissions")
+	}
+	svc := newTestConfigService(t)
+	if err := svc.Save(); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]os.FileMode{filepath.Dir(svc.configPath): 0700, svc.configPath + ".lock": 0600} {
+		info, err := os.Stat(path)
+		if err != nil || info.Mode().Perm() != want {
+			t.Errorf("private path %s: info=%v error=%v, want %04o", path, info, err, want)
+		}
+	}
+	before, err := os.ReadFile(svc.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(svc.configPath + ".lock"); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "unrelated")
+	if err := os.WriteFile(outside, []byte("preserve me"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, svc.configPath+".lock"); err != nil {
+		t.Fatal(err)
+	}
+	settings := svc.GetSettings()
+	settings.Theme = "light"
+	if err := svc.UpdateSettings(settings); err == nil {
+		t.Error("accepted a lock symlink to an unrelated file")
+	}
+	after, err := os.ReadFile(svc.configPath)
+	if err != nil || !reflect.DeepEqual(after, before) {
+		t.Errorf("failed private-file preparation changed saved config: %s, %v", after, err)
 	}
 }
 

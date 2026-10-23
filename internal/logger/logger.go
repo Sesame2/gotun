@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 // LogLevel 定义日志级别
@@ -24,6 +25,7 @@ type LogCallback func(level string, message string)
 
 // Logger 处理应用日志
 type Logger struct {
+	mu       sync.RWMutex
 	verbose  bool
 	logger   *log.Logger
 	level    LogLevel
@@ -46,11 +48,15 @@ func NewLogger(verbose bool) *Logger {
 
 // SetCallback 设置日志回调函数
 func (l *Logger) SetCallback(cb LogCallback) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.callback = cb
 }
 
 // GetCallback 获取日志回调函数
 func (l *Logger) GetCallback() LogCallback {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 	return l.callback
 }
 
@@ -72,6 +78,8 @@ func (l *Logger) SetLogFile(filePath string) error {
 		return fmt.Errorf("无法打开日志文件: %w", err)
 	}
 
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	// 关闭之前的日志文件
 	if l.file != nil {
 		l.file.Close()
@@ -88,12 +96,26 @@ func (l *Logger) SetLogFile(filePath string) error {
 
 // SetLevel 设置日志级别
 func (l *Logger) SetLevel(level LogLevel) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.level = level
+}
+
+func (l *Logger) SetVerbose(verbose bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.verbose = verbose
+	l.level = LevelInfo
+	if verbose {
+		l.level = LevelDebug
+	}
 }
 
 // 日志输出方法
 func (l *Logger) log(level LogLevel, format string, args ...interface{}) {
-	if level < l.level {
+	l.mu.RLock()
+	if level < l.level || (level == LevelDebug && !l.verbose) {
+		l.mu.RUnlock()
 		return
 	}
 
@@ -120,25 +142,23 @@ func (l *Logger) log(level LogLevel, format string, args ...interface{}) {
 
 	msg := fmt.Sprintf(format, args...)
 	l.logger.Println(prefix + msg)
+	callback := l.callback
+	l.mu.RUnlock()
 
 	// 调用回调
-	if l.callback != nil {
-		l.callback(levelStr, msg)
+	if callback != nil {
+		callback(levelStr, msg)
 	}
 }
 
 // Debug 记录调试日志
 func (l *Logger) Debug(msg string) {
-	if l.verbose {
-		l.log(LevelDebug, "%s", msg)
-	}
+	l.log(LevelDebug, "%s", msg)
 }
 
 // Debugf 记录格式化调试日志
 func (l *Logger) Debugf(format string, args ...interface{}) {
-	if l.verbose {
-		l.log(LevelDebug, format, args...)
-	}
+	l.log(LevelDebug, format, args...)
 }
 
 // Info 记录信息日志
@@ -185,8 +205,13 @@ func (l *Logger) Fatalf(format string, args ...interface{}) {
 
 // Close 关闭日志系统
 func (l *Logger) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if l.file != nil {
-		return l.file.Close()
+		l.logger.SetOutput(os.Stdout)
+		err := l.file.Close()
+		l.file = nil
+		return err
 	}
 	return nil
 }

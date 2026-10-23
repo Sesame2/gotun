@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -25,6 +26,16 @@ var (
 	aliasFlags []string
 )
 
+type systemProxyManager interface {
+	Enable() error
+	Disable() error
+	IsEnabled() bool
+}
+
+var newSystemProxy = func(log *logger.Logger, httpAddr, socksAddr string) systemProxyManager {
+	return sysproxy.NewManager(log, httpAddr, socksAddr)
+}
+
 // rootCmd 代表不带任何子命令时的基础命令
 var rootCmd = &cobra.Command{
 	Use:     "gotun [user@host]",
@@ -33,7 +44,7 @@ var rootCmd = &cobra.Command{
 	Long: `gotun 是一个通过SSH隧道实现HTTP代理的命令行工具。
 它可以帮助您安全地访问内网资源或将远程主机作为网络出口。`,
 	Args: cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, args []string) (runErr error) {
 		// 自动开启 TUN 模式: 如果指定了 Global, Route 或 NAT
 		if cfg.TunGlobal || len(cfg.TunRoute) > 0 || len(aliasFlags) > 0 {
 			cfg.TunMode = true
@@ -49,12 +60,11 @@ var rootCmd = &cobra.Command{
 			}
 
 			// 构建 sudo 命令
-			sudoArgs := []string{"sudo", exe}
+			sudoArgs := []string{"sudo", "--preserve-env=HOME", exe}
 			sudoArgs = append(sudoArgs, os.Args[1:]...)
 
 			// 执行 sudo
-			syscall.Exec("/usr/bin/sudo", sudoArgs, os.Environ())
-			return nil
+			return syscall.Exec("/usr/bin/sudo", sudoArgs, os.Environ())
 		}
 
 		// 从参数填充SSH用户和服务器
@@ -146,18 +156,19 @@ var rootCmd = &cobra.Command{
 		}
 
 		// 2. 初始化 SSHClient
+		cfg.Context = cmd.Context()
 		sshClient, err := proxy.NewSSHClient(cfg, log)
 		if err != nil {
 			return fmt.Errorf("SSH连接失败: %w", err)
 		}
-		defer sshClient.Close()
+		defer func() { runErr = errors.Join(runErr, sshClient.Close()) }()
 
 		// 3. 初始化 HTTP 代理
 		httpProxy, err := proxy.NewHTTPOverSSH(cfg, log, sshClient, r)
 		if err != nil {
 			return fmt.Errorf("HTTP代理初始化失败: %w", err)
 		}
-		defer httpProxy.Close()
+		defer func() { runErr = errors.Join(runErr, httpProxy.Close()) }()
 
 		// 4. 初始化 SOCKS5 代理
 		var socksProxy *proxy.SOCKS5OverSSH
@@ -166,12 +177,12 @@ var rootCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("SOCKS5代理初始化失败: %w", err)
 			}
-			defer socksProxy.Close()
+			defer func() { runErr = errors.Join(runErr, socksProxy.Close()) }()
 		}
 
-		var proxyMgr *sysproxy.Manager
+		var proxyMgr systemProxyManager
 		if cfg.SystemProxy {
-			proxyMgr = sysproxy.NewManager(log, cfg.ListenAddr, cfg.SocksAddr)
+			proxyMgr = newSystemProxy(log, cfg.ListenAddr, cfg.SocksAddr)
 		}
 
 		// 5. 初始化 TUN 模式
@@ -181,21 +192,24 @@ var rootCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("TUN服务初始化失败: %w", err)
 			}
-			defer tunService.Close()
+			defer func() { runErr = errors.Join(runErr, tunService.Close()) }()
 		}
 
+		if proxyMgr != nil {
+			defer func() { runErr = errors.Join(runErr, proxyMgr.Disable()) }()
+			if err := proxyMgr.Enable(); err != nil {
+				return fmt.Errorf("设置系统代理失败: %w", err)
+			}
+		}
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+		defer signal.Stop(sigChan)
+		serviceErrors := make(chan error, 3)
 
 		go func() {
-			if cfg.SystemProxy && proxyMgr != nil {
-				if err := proxyMgr.Enable(); err != nil {
-					log.Errorf("设置系统代理失败: %v", err)
-				}
-			}
 			if err := httpProxy.Start(); err != nil {
 				log.Errorf("HTTP代理服务启动失败: %v", err)
-				sigChan <- syscall.SIGTERM
+				serviceErrors <- fmt.Errorf("HTTP代理服务失败: %w", err)
 			}
 		}()
 
@@ -203,7 +217,7 @@ var rootCmd = &cobra.Command{
 			go func() {
 				if err := tunService.Start(); err != nil {
 					log.Errorf("TUN服务启动失败: %v", err)
-					sigChan <- syscall.SIGTERM
+					serviceErrors <- fmt.Errorf("TUN服务失败: %w", err)
 				}
 			}()
 		}
@@ -212,7 +226,7 @@ var rootCmd = &cobra.Command{
 			go func() {
 				if err := socksProxy.Start(); err != nil {
 					log.Errorf("SOCKS5代理服务启动失败: %v", err)
-					sigChan <- syscall.SIGTERM
+					serviceErrors <- fmt.Errorf("SOCKS5代理服务失败: %w", err)
 				}
 			}()
 		}
@@ -231,7 +245,7 @@ var rootCmd = &cobra.Command{
 		} else {
 			fmt.Println("直连SSH服务器:", cfg.SSHServer)
 		}
-		if cfg.SystemProxy {
+		if proxyMgr != nil && proxyMgr.IsEnabled() {
 			fmt.Println("系统代理已启用")
 		}
 		if cfg.RuleFile != "" {
@@ -239,30 +253,13 @@ var rootCmd = &cobra.Command{
 		}
 		fmt.Println("按 Ctrl+C 退出")
 
-		<-sigChan
-		log.Info("收到信号, 正在关闭代理服务...")
-
-		if cfg.SystemProxy && proxyMgr != nil {
-			if err := proxyMgr.Disable(); err != nil {
-				log.Errorf("恢复系统代理设置失败: %v", err)
-			}
-		}
-
-		if err := httpProxy.Close(); err != nil {
-			log.Errorf("关闭HTTP代理服务失败: %v", err)
-		}
-
-		// 新增关闭逻辑
-		if socksProxy != nil {
-			if err := socksProxy.Close(); err != nil {
-				log.Errorf("关闭SOCKS5代理服务失败: %v", err)
-			}
-		}
-
-		if tunService != nil {
-			if err := tunService.Close(); err != nil {
-				log.Errorf("关闭TUN服务失败: %v", err)
-			}
+		select {
+		case <-sigChan:
+			log.Info("收到信号, 正在关闭代理服务...")
+		case err := <-serviceErrors:
+			return err
+		case <-cmd.Context().Done():
+			return cmd.Context().Err()
 		}
 
 		return nil
@@ -275,12 +272,13 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&cfg.SSHPort, "port", "p", "22", "SSH服务器端口")
 	rootCmd.PersistentFlags().StringVar(&cfg.SSHPassword, "pass", "", "SSH密码 (不安全, 建议使用交互式认证)")
 	rootCmd.PersistentFlags().StringVarP(&cfg.SSHKeyFile, "identity_file", "i", "", "用于认证的私钥文件路径")
+	rootCmd.PersistentFlags().StringVar(&cfg.KnownHostsFile, "known-hosts", "", "SSH主机密钥信任文件 (默认 ~/.ssh/known_hosts；未知主机默认拒绝)")
 	rootCmd.PersistentFlags().StringSliceVarP(&cfg.JumpHosts, "jump", "J", []string{}, "跳板机列表,用逗号分隔 (格式: user@host:port)")
 	rootCmd.PersistentFlags().DurationVar(&cfg.Timeout, "timeout", 10*time.Second, "连接超时时间")
 
 	// --- Group 2: Proxy Services ---
-	rootCmd.PersistentFlags().StringVarP(&cfg.ListenAddr, "listen", "l", ":8080", "本地HTTP代理监听地址 [已废弃，推荐使用 --http]")
-	rootCmd.PersistentFlags().StringVar(&cfg.ListenAddr, "http", ":8080", "本地HTTP代理监听地址 (别名: --listen)")
+	rootCmd.PersistentFlags().StringVarP(&cfg.ListenAddr, "listen", "l", "127.0.0.1:8080", "本地HTTP代理监听地址 [已废弃，推荐使用 --http]")
+	rootCmd.PersistentFlags().StringVar(&cfg.ListenAddr, "http", "127.0.0.1:8080", "本地HTTP代理监听地址 (别名: --listen)")
 	rootCmd.PersistentFlags().StringVar(&cfg.SocksAddr, "socks5", "", "SOCKS5 代理监听地址 (例如 :1080)")
 	rootCmd.PersistentFlags().BoolVar(&cfg.SystemProxy, "sys-proxy", true, "自动设置/恢复系统代理")
 	rootCmd.PersistentFlags().StringVar(&cfg.HTTPUpstream, "http-upstream", "", "强制将所有HTTP请求转发到此上游 (格式: host:port)")
@@ -302,6 +300,7 @@ func init() {
 }
 
 func Execute(version string) {
+	Version = version
 	rootCmd.Version = version
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"sync"
 	"time"
 
@@ -44,29 +45,31 @@ func (c *TunConfig) Validate() error {
 
 	// 验证 CIDR
 	if c.TunCIDR != "" {
-		_, _, err := net.ParseCIDR(c.TunCIDR)
+		ip, network, err := net.ParseCIDR(c.TunCIDR)
 		if err != nil {
 			return fmt.Errorf("无效的TUN CIDR: %s (%v)", c.TunCIDR, err)
+		}
+		if _, bits := network.Mask.Size(); ip.To4() == nil || bits != 32 {
+			return fmt.Errorf("TUN CIDR 仅支持 IPv4: %s", c.TunCIDR)
 		}
 	}
 
 	// 验证路由
 	for _, route := range c.TunRoutes {
-		_, _, err := net.ParseCIDR(route)
+		ip, network, err := net.ParseCIDR(route)
 		if err != nil {
 			return fmt.Errorf("无效的路由CIDR: %s (%v)", route, err)
+		}
+		if _, bits := network.Mask.Size(); ip.To4() == nil || bits != 32 {
+			return fmt.Errorf("TUN 路由仅支持 IPv4: %s", route)
 		}
 	}
 
 	// 验证 NAT 规则
 	for _, nat := range c.TunNAT {
-		_, _, err := net.ParseCIDR(nat.SrcCIDR)
+		_, err := config.ParseSubnetAlias(nat.SrcCIDR + ":" + nat.DstCIDR)
 		if err != nil {
-			return fmt.Errorf("无效的NAT源CIDR: %s (%v)", nat.SrcCIDR, err)
-		}
-		_, _, err = net.ParseCIDR(nat.DstCIDR)
-		if err != nil {
-			return fmt.Errorf("无效的NAT目标CIDR: %s (%v)", nat.DstCIDR, err)
+			return fmt.Errorf("无效的NAT映射: %w", err)
 		}
 	}
 
@@ -106,7 +109,6 @@ type TunService struct {
 	status         TunStatus
 	startTime      time.Time
 	errMsg         string
-	logCallback    logger.LogCallback
 }
 
 // NewTunService 创建TUN服务
@@ -127,7 +129,6 @@ func NewTunService() *TunService {
 func (s *TunService) SetLogCallback(cb logger.LogCallback) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.logCallback = cb
 	if s.logger != nil {
 		s.logger.SetCallback(cb)
 	}
@@ -135,9 +136,6 @@ func (s *TunService) SetLogCallback(cb logger.LogCallback) {
 
 // log 记录日志
 func (s *TunService) log(level, message string) {
-	if s.logCallback != nil {
-		s.logCallback(level, message)
-	}
 	if s.logger != nil {
 		switch level {
 		case "INFO":
@@ -152,6 +150,10 @@ func (s *TunService) log(level, message string) {
 	}
 }
 
+func (s *TunService) SetVerbose(verbose bool) { s.logger.SetVerbose(verbose) }
+
+func (s *TunService) SetLogFile(path string) error { return s.logger.SetLogFile(path) }
+
 // SetConfig 设置TUN配置
 func (s *TunService) SetConfig(cfg *TunConfig) {
 	s.lifecycleMu.Lock()
@@ -161,7 +163,14 @@ func (s *TunService) SetConfig(cfg *TunConfig) {
 	if s.status == TunStatusRunning || s.status == TunStatusStarting || s.status == TunStatusStopping {
 		return
 	}
-	s.cfg = cfg
+	if cfg == nil {
+		s.cfg = nil
+		return
+	}
+	snapshot := *cfg
+	snapshot.TunRoutes = slices.Clone(cfg.TunRoutes)
+	snapshot.TunNAT = slices.Clone(cfg.TunNAT)
+	s.cfg = &snapshot
 }
 
 // SetFullConfig 设置完整配置(包含SSH信息)
@@ -173,7 +182,15 @@ func (s *TunService) SetFullConfig(cfg *config.Config) {
 	if s.status == TunStatusRunning || s.status == TunStatusStarting || s.status == TunStatusStopping {
 		return
 	}
-	s.fullCfg = cfg
+	if cfg == nil {
+		s.fullCfg = nil
+		return
+	}
+	snapshot := *cfg
+	snapshot.JumpHosts = slices.Clone(cfg.JumpHosts)
+	snapshot.JumpHostsList = slices.Clone(cfg.JumpHostsList)
+	snapshot.TunRoute = slices.Clone(cfg.TunRoute)
+	s.fullCfg = &snapshot
 }
 
 // GetStatus 获取TUN服务状态
@@ -188,7 +205,7 @@ func (s *TunService) GetStatus() TunStats {
 	}
 
 	if s.cfg != nil {
-		stats.Routes = s.cfg.TunRoutes
+		stats.Routes = slices.Clone(s.cfg.TunRoutes)
 		// 转换 NAT 规则为字符串列表
 		for _, nat := range s.cfg.TunNAT {
 			stats.NATRules = append(stats.NATRules, fmt.Sprintf("%s -> %s", nat.SrcCIDR, nat.DstCIDR))
@@ -224,8 +241,12 @@ func isWindowsAdmin() bool {
 
 	// 尝试打开一个需要管理员权限的操作
 	// 这里使用一个简单的检测方法
-	_, err := os.Open("\\\\.\\PHYSICALDRIVE0")
-	return err == nil
+	file, err := os.Open("\\\\.\\PHYSICALDRIVE0")
+	if err != nil {
+		return false
+	}
+	_ = file.Close()
+	return true
 }
 
 // GetElevationCommand 获取提权命令
@@ -315,9 +336,15 @@ func (s *TunService) Start() error {
 	s.fullCfg.SubnetAliases = nil
 	for _, nat := range s.cfg.TunNAT {
 		alias, err := config.ParseSubnetAlias(nat.SrcCIDR + ":" + nat.DstCIDR)
-		if err == nil {
-			s.fullCfg.SubnetAliases = append(s.fullCfg.SubnetAliases, alias)
+		if err != nil {
+			s.setError(err.Error())
+			return err
 		}
+		s.fullCfg.SubnetAliases = append(s.fullCfg.SubnetAliases, alias)
+	}
+	if err := s.fullCfg.Validate(); err != nil {
+		s.setError(err.Error())
+		return err
 	}
 
 	// 修正: GUI环境下禁用交互式认证
@@ -330,7 +357,7 @@ func (s *TunService) Start() error {
 	if err != nil {
 		errMsg := fmt.Sprintf("SSH连接失败: %v", err)
 		s.setError(errMsg)
-		return fmt.Errorf("%s", errMsg)
+		return fmt.Errorf("SSH连接失败: %w", err)
 	}
 	s.sshClient = sshClient
 	s.log("INFO", "SSH连接已建立")
@@ -342,7 +369,7 @@ func (s *TunService) Start() error {
 		s.sshClient = nil
 		errMsg := fmt.Sprintf("TUN服务初始化失败: %v", err)
 		s.setError(errMsg)
-		return fmt.Errorf("%s", errMsg)
+		return fmt.Errorf("TUN服务初始化失败: %w", err)
 	}
 	s.tunService = tunService
 

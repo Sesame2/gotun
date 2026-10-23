@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -30,6 +31,9 @@ type Config struct {
 	SSHUser         string
 	SSHPassword     string
 	SSHKeyFile      string
+	KnownHostsFile  string // Empty uses ~/.ssh/known_hosts.
+	HostKeyPrompt   func(host, fingerprint string) bool
+	Context         context.Context
 	HTTPUpstream    string        // 强制 HTTP 上游 (原 SSHTargetDial)
 	SSHPort         string        // 添加SSH端口配置
 	SocksAddr       string        // SOCKS5 监听地址
@@ -51,7 +55,7 @@ type Config struct {
 // NewConfig 创建默认配置
 func NewConfig() *Config {
 	return &Config{
-		ListenAddr:      ":8080",
+		ListenAddr:      "127.0.0.1:8080",
 		SSHServer:       "",
 		SSHPort:         "22", // 默认SSH端口
 		JumpHosts:       []string{},

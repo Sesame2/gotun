@@ -34,7 +34,7 @@ func TestNewTunServiceAddressCalculation(t *testing.T) {
 }
 
 func TestNewTunServiceRejectsInvalidAddress(t *testing.T) {
-	for _, cidr := range []string{"", "not-cidr", "10.0.0.1", "10.0.0.1/33", "2001:db8::1/64"} {
+	for _, cidr := range []string{"", "not-cidr", "10.0.0.1", "10.0.0.1/33", "2001:db8::1/64", "::ffff:10.0.0.1/120"} {
 		t.Run(cidr, func(t *testing.T) {
 			cfg := config.NewConfig()
 			cfg.TunCIDR = cidr

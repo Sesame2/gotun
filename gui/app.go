@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"github.com/Sesame2/gotun/gui/internal/tray"
 	"os"
-	"os/exec"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,23 +23,30 @@ type LogEntry struct {
 
 // App struct
 type App struct {
-	actionMu      sync.Mutex
-	actionBusy    atomic.Bool
-	stateMu       sync.RWMutex
-	httpProfileID string
-	tunProfileID  string
-	quitting      atomic.Bool
-	trayReady     atomic.Bool
-	trayMu        sync.Mutex
-	tray          tray.Native
-	trayDone      chan struct{}
-	trayUpdates   chan struct{}
-	trayCloseOnce sync.Once
-	trayInit      sync.Once
-	ctx           context.Context
-	proxyService  *service.ProxyService
-	tunService    *service.TunService
-	configService *service.ConfigService
+	exitCleanup    func() error
+	connectionMu   sync.Mutex
+	connectionID   uint64
+	connections    map[uint64]context.CancelFunc
+	hostKeyPrompt  func(string, string) bool
+	launchElevated func(string, []string) error
+	elevationBusy  atomic.Bool
+	actionMu       sync.Mutex
+	actionBusy     atomic.Bool
+	stateMu        sync.RWMutex
+	httpProfileID  string
+	tunProfileID   string
+	quitting       atomic.Bool
+	trayReady      atomic.Bool
+	trayMu         sync.Mutex
+	tray           tray.Native
+	trayDone       chan struct{}
+	trayUpdates    chan struct{}
+	trayCloseOnce  sync.Once
+	trayInit       sync.Once
+	ctx            context.Context
+	proxyService   *service.ProxyService
+	tunService     *service.TunService
+	configService  *service.ConfigService
 
 	// 日志系统
 	logMu      sync.RWMutex
@@ -52,13 +57,16 @@ type App struct {
 
 // NewApp creates a new App application struct
 func NewApp() *App {
-	return &App{
-		trayDone: make(chan struct{}), trayUpdates: make(chan struct{}, 1),
+	app := &App{
+		launchElevated: launchElevated,
+		trayDone:       make(chan struct{}), trayUpdates: make(chan struct{}, 1),
 		proxyService: service.NewProxyService(),
 		tunService:   service.NewTunService(),
 		logs:         make([]LogEntry, 0, 1000),
 		maxLogs:      1000,
 	}
+	app.exitCleanup = app.stopAllProxiesLocked
+	return app
 }
 
 // startup is called when the app starts
@@ -88,9 +96,13 @@ func (a *App) startup(ctx context.Context) {
 	if a.configService != nil {
 		settings := a.configService.GetSettings()
 		a.proxyService.SetVerbose(settings.Verbose)
+		a.tunService.SetVerbose(settings.Verbose)
 		if settings.LogFile != "" {
 			if err := a.proxyService.SetLogFile(settings.LogFile); err != nil {
 				a.AddLog("ERROR", fmt.Sprintf("设置日志文件失败: %v", err))
+			}
+			if err := a.tunService.SetLogFile(settings.LogFile); err != nil {
+				a.AddLog("ERROR", fmt.Sprintf("设置TUN日志文件失败: %v", err))
 			}
 		}
 	}
@@ -100,6 +112,7 @@ func (a *App) startup(ctx context.Context) {
 
 // shutdown is called when the app is closing
 func (a *App) shutdown(ctx context.Context) {
+	a.cancelConnections()
 	a.quitting.Store(true)
 	a.trayCloseOnce.Do(func() { close(a.trayDone) })
 	a.trayMu.Lock()
@@ -149,7 +162,8 @@ func (a *App) startProxy(profileID string) error {
 	a.AddLog("INFO", fmt.Sprintf("正在启动代理服务，配置: %s", profile.Name))
 
 	// 转换配置
-	cfg := a.configService.ProfileToConfig(profile)
+	cfg, done := a.connectionConfig(profile)
+	defer done()
 	switch a.GetSettings().SystemProxyMode {
 	case "auto":
 		cfg.SystemProxy = true
@@ -165,7 +179,9 @@ func (a *App) startProxy(profileID string) error {
 
 	// 更新最后使用时间
 	a.setActiveProfile(profileID, false)
-	a.configService.SetLastUsed(profileID)
+	if err := a.configService.SetLastUsed(profileID); err != nil {
+		a.AddLog("WARN", fmt.Sprintf("代理已启动，但最近使用时间保存失败: %v", err))
+	}
 
 	a.AddLog("INFO", fmt.Sprintf("代理服务已启动，HTTP: %s, SOCKS5: %s", cfg.ListenAddr, cfg.SocksAddr))
 	return nil
@@ -173,6 +189,7 @@ func (a *App) startProxy(profileID string) error {
 
 // StopProxy 停止代理服务
 func (a *App) StopProxy() error {
+	a.cancelConnections()
 	a.beginAction()
 	defer a.endAction()
 	return a.stopProxy()
@@ -257,7 +274,8 @@ func (a *App) startTunProxy(profileID string) error {
 	a.tunService.SetConfig(tunCfg)
 
 	// 设置完整配置(包含SSH信息)
-	fullCfg := a.configService.ProfileToConfig(profile)
+	fullCfg, done := a.connectionConfig(profile)
+	defer done()
 	a.tunService.SetFullConfig(fullCfg)
 
 	// 启动TUN服务
@@ -268,7 +286,9 @@ func (a *App) startTunProxy(profileID string) error {
 
 	// 更新最后使用时间
 	a.setActiveProfile(profileID, true)
-	a.configService.SetLastUsed(profileID)
+	if err := a.configService.SetLastUsed(profileID); err != nil {
+		a.AddLog("WARN", fmt.Sprintf("代理已启动，但最近使用时间保存失败: %v", err))
+	}
 
 	mode := "路由模式"
 	if profile.TunGlobal {
@@ -280,6 +300,7 @@ func (a *App) startTunProxy(profileID string) error {
 
 // StopTunProxy 停止TUN代理服务
 func (a *App) StopTunProxy() error {
+	a.cancelConnections()
 	a.beginAction()
 	defer a.endAction()
 	return a.stopTunProxy()
@@ -302,83 +323,38 @@ func (a *App) RequiresTunElevation() bool {
 
 // RequestElevationRestart 请求以管理员权限重启应用
 func (a *App) RequestElevationRestart() error {
+	if a.quitting.Load() || !a.elevationBusy.CompareAndSwap(false, true) {
+		return fmt.Errorf("正在等待提权重启完成，请勿重复操作")
+	}
+	defer a.elevationBusy.Store(false)
 	a.AddLog("INFO", "正在请求管理员权限重启...")
-
-	execPath, err := os.Executable()
+	executable, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("获取可执行文件路径失败: %v", err)
+		return fmt.Errorf("获取可执行文件路径失败: %w", err)
 	}
-
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		// macOS 使用 osascript 进行提权
-		// 重要：必须直接执行二进制文件而不是使用 open 命令
-		// 因为 open 命令启动的应用不会继承 root 权限
-		// do shell script ... with administrator privileges 会以 root 身份执行命令
-
-		// 不使用 nohup (会阻止 GUI 显示)，使用子 shell 和 & 后台执行
-		// ( ... ) & 创建独立的后台子 shell
-		script := fmt.Sprintf(`do shell script "('%s' &)" with administrator privileges`, execPath)
-		cmd = exec.Command("osascript", "-e", script)
-
-		a.AddLog("INFO", "等待用户授权...")
-		a.AddLog("DEBUG", fmt.Sprintf("执行脚本: %s", script))
-		a.AddLog("DEBUG", fmt.Sprintf("可执行文件路径: %s", execPath))
-
-		// 在新 goroutine 中运行，避免阻塞 UI
-		go func() {
-			output, err := cmd.CombinedOutput()
-			if err != nil {
-				a.AddLog("ERROR", fmt.Sprintf("提权失败: %v, 输出: %s", err, string(output)))
-				return
-			}
-			a.AddLog("INFO", "提权成功，正在退出当前实例...")
-			// 给新进程足够时间启动
-			time.Sleep(1 * time.Second)
-			a.QuitApp()
-		}()
-		return nil
-
-	case "linux":
-		// Linux 优先使用 pkexec
-		if _, err := exec.LookPath("pkexec"); err == nil {
-			cmd = exec.Command("pkexec", execPath)
-		} else {
-			// 使用 xterm + sudo 作为回退
-			cmd = exec.Command("xterm", "-e", "sudo", execPath)
-		}
-	case "windows":
-		// Windows 使用 PowerShell 以管理员权限启动
-		cmd = exec.Command("powershell", "-Command",
-			fmt.Sprintf("Start-Process -FilePath '%s' -Verb RunAs", execPath))
-	default:
-		return fmt.Errorf("不支持的操作系统: %s", runtime.GOOS)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
 	}
-
-	// 启动提权进程（Linux/Windows）
-	if err := cmd.Start(); err != nil {
-		a.AddLog("ERROR", fmt.Sprintf("启动提权进程失败: %v", err))
-		return fmt.Errorf("启动提权进程失败: %v", err)
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
 	}
-
-	a.AddLog("INFO", "提权进程已启动，正在退出当前实例...")
-
-	// 退出当前应用
-	go func() {
-		time.Sleep(500 * time.Millisecond)
-		a.QuitApp()
-	}()
-
-	return nil
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	if err := waitForElevatedInstance(ctx, home, func(args []string) error { return a.launchElevated(executable, args) }); err != nil {
+		a.AddLog("ERROR", err.Error())
+		return err
+	}
+	a.AddLog("INFO", "提权实例已就绪，正在退出当前实例")
+	return a.QuitApp()
 }
 
-// IsRunningAsAdmin 检查是否以管理员权限运行
+// TestConnection 测试SSH连接
 func (a *App) IsRunningAsAdmin() bool {
 	return !a.tunService.RequiresElevation()
 }
 
-// TestConnection 测试SSH连接
 func (a *App) TestConnection(profileID string) error {
 	if a.configService == nil {
 		return fmt.Errorf("配置服务未初始化")
@@ -392,7 +368,8 @@ func (a *App) TestConnection(profileID string) error {
 
 	a.AddLog("INFO", fmt.Sprintf("正在测试SSH连接: %s@%s:%s", profile.User, profile.Host, profile.Port))
 
-	cfg := a.configService.ProfileToConfig(profile)
+	cfg, done := a.connectionConfig(profile)
+	defer done()
 	err = a.proxyService.TestConnection(cfg)
 	if err != nil {
 		a.AddLog("ERROR", fmt.Sprintf("SSH连接测试失败: %v", err))
@@ -405,15 +382,19 @@ func (a *App) TestConnection(profileID string) error {
 
 // TestConnectionWithConfig 使用临时配置测试连接
 func (a *App) TestConnectionWithConfig(host, port, user, password, keyFile string) error {
+	if a.configService == nil {
+		return fmt.Errorf("配置服务未初始化")
+	}
 	profile := &service.SSHProfile{
 		Host:     host,
 		Port:     port,
 		User:     user,
 		Password: password,
 		KeyFile:  keyFile,
-		HTTPAddr: ":8080",
+		HTTPAddr: "127.0.0.1:8080",
 	}
-	cfg := a.configService.ProfileToConfig(profile)
+	cfg, done := a.connectionConfig(profile)
+	defer done()
 	return a.proxyService.TestConnection(cfg)
 }
 
@@ -651,9 +632,27 @@ func (a *App) ShowWindow() {
 }
 
 // QuitApp 退出应用
-func (a *App) QuitApp() {
+func (a *App) prepareQuit() error {
+	a.cancelConnections()
+	a.beginAction()
+	defer a.endAction()
+	if a.quitting.Load() {
+		return nil
+	}
+	if err := a.exitCleanup(); err != nil {
+		return err
+	}
 	a.quitting.Store(true)
+	return nil
+}
+
+func (a *App) QuitApp() error {
+	if err := a.prepareQuit(); err != nil {
+		a.showActionError(err)
+		return err
+	}
 	if a.ctx != nil {
 		wailsRuntime.Quit(a.ctx)
 	}
+	return nil
 }

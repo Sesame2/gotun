@@ -16,7 +16,7 @@ IFS=$(printf '\n\t')
 # --- Configuration ---
 GITHUB_REPO="Sesame2/gotun"
 TARGET_FILE="gotun"
-PREFIX_DEFAULT="${HOME}/.local"
+PREFIX_DEFAULT="${PREFIX:-${HOME}/.local}"
 INSTALL_DIR_DEFAULT="${PREFIX_DEFAULT}/bin"
 
 # --- Helper Functions ---
@@ -105,18 +105,20 @@ esac
 info "Detected system: ${OS}-${ARCH}"
 
 # --- Version Resolution ---
-get_latest_tag_api() {
-  ${DOWNLOADER} -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | sed -nE 's/.*"tag_name": *"([^"]+)".*/\1/p' | head -n1
-}
-get_latest_tag_html() {
-  if [ "$DOWNLOADER" = "curl" ]; then url=$(${DOWNLOADER} -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/${GITHUB_REPO}/releases/latest"); else url=$(${DOWNLOADER} -q -S --spider "https://github.com/${GITHUB_REPO}/releases/latest" 2>&1 | sed -nE 's/.*Location: (.*)/\1/p' | tail -n1); [ -z "$url" ] && url="https://github.com/${GITHUB_REPO}/releases/latest"; fi
-  printf "%s" "$url" | sed -nE 's#.*/tag/([^/?]+).*#\1#p'
+get_latest_cli_tag() {
+  if [ "$DOWNLOADER" = "curl" ]; then
+    releases=$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=30") || return 1
+  else
+    releases=$(wget -qO- "https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=30") || return 1
+  fi
+  asset_url=$(printf '%s\n' "$releases" | grep -oE "https://github[.]com/${GITHUB_REPO}/releases/download/v[0-9]+[.][0-9]+[.][0-9]+/gotun_v[0-9]+[.][0-9]+[.][0-9]+_${OS}_${ARCH}[.]tar[.]gz" | head -n1)
+  printf '%s\n' "$asset_url" | sed -nE 's@.*/download/([^/]+)/.*@\1@p'
 }
 if [ -z "${GOTUN_VERSION}" ]; then
-  GOTUN_VERSION="$(get_latest_tag_api || true)"
-  if [ -z "$GOTUN_VERSION" ]; then warn "GitHub API failed, trying HTML fallback..."; GOTUN_VERSION="$(get_latest_tag_html || true)"; fi
-  [ -z "$GOTUN_VERSION" ] && error "Could not determine the latest version tag."
+  GOTUN_VERSION="$(get_latest_cli_tag || true)"
+  [ -n "$GOTUN_VERSION" ] || error "Could not find a CLI release for ${OS}/${ARCH}; retry or specify --version vX.Y.Z."
 fi
+printf '%s\n' "$GOTUN_VERSION" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+$' || error "Version must have the form vX.Y.Z."
 info "Target version: $GOTUN_VERSION"
 
 # --- Download & Install ---
@@ -131,23 +133,44 @@ fetch() { if [ "$DOWNLOADER" = "curl" ]; then curl -fL "$1" -o "$2"; else wget -
 info "Downloading $DOWNLOAD_URL"
 ARCHIVE="${TMP_DIR}/${ASSET}"
 fetch "$DOWNLOAD_URL" "$ARCHIVE" || error "Download failed: $DOWNLOAD_URL"
-if fetch "$SHA256_URL" "${TMP_DIR}/SHA256SUMS" 2>/dev/null; then
-  info "Verifying SHA256 checksum..."; (cd "$TMP_DIR" && grep " ${ASSET}\$" SHA256SUMS | sha256sum -c -) || error "Checksum validation failed."
-else warn "SHA256SUMS file not found, skipping checksum validation."; fi
+if ! fetch "$SHA256_URL" "${TMP_DIR}/SHA256SUMS"; then
+  # The existing v0.8.1 release predates manifests. These immutable archive hashes
+  # were checked against GitHub's asset digest and the downloaded bytes.
+  case "$GOTUN_VERSION/$OS/$ARCH" in
+    v0.8.1/darwin/amd64) digest=c35275c9d656840016c02c7e2804b9e330d9a8bd2a3bc4e13f329cf04ac4158e ;;
+    v0.8.1/darwin/arm64) digest=65fed95e82770e03461f258af7ad24a155b1172247a616e7f04228a7695dc9ce ;;
+    v0.8.1/linux/amd64) digest=5527f91342b7fe57f53fc8cfef95e39e2edd7089cdaa42696a5bbc7f016e96b9 ;;
+    v0.8.1/linux/arm64) digest=7ef455e8f2795bf7678bacc595ed38b7e6e359e9bcbd048691eec2889a91e4b2 ;;
+    *) error "SHA256SUMS is required; refusing an unverified download." ;;
+  esac
+  printf '%s  %s\n' "$digest" "$ASSET" > "${TMP_DIR}/SHA256SUMS"
+fi
+info "Verifying SHA256 checksum..."
+if command -v sha256sum >/dev/null 2>&1; then
+  (cd "$TMP_DIR" && awk -v "asset=$ASSET" '$2 == asset' SHA256SUMS | sha256sum -c -) || error "Checksum validation failed."
+elif command -v shasum >/dev/null 2>&1; then
+  (cd "$TMP_DIR" && awk -v "asset=$ASSET" '$2 == asset' SHA256SUMS | shasum -a 256 -c -) || error "Checksum validation failed."
+else
+  error "Missing dependency: sha256sum or shasum"
+fi
 info "Extracting archive..."
 EXTRACT_DIR="${TMP_DIR}/out"
 mkdir -p "$EXTRACT_DIR"
 tar -xzf "$ARCHIVE" -C "$EXTRACT_DIR"
-FOUND_BINARY=$(find "$EXTRACT_DIR" -type f -executable | head -n 1)
-if [ -z "$FOUND_BINARY" ]; then error "Binary not found in the archive."; fi
-mv "$FOUND_BINARY" "${EXTRACT_DIR}/${TARGET_FILE}"
-[ -f "${EXTRACT_DIR}/${TARGET_FILE}" ] || error "Failed to prepare binary '${TARGET_FILE}'."
+FOUND_BINARY="${EXTRACT_DIR}/${TARGET_FILE}"
+if [ ! -f "$FOUND_BINARY" ]; then
+  FOUND_BINARY="${EXTRACT_DIR}/gotun_${GOTUN_VERSION}_${OS}_${ARCH}"
+fi
+[ -f "$FOUND_BINARY" ] || error "CLI binary not found in the archive."
 info "Installing to ${INSTALL_DIR}"
-mkdir -p "$INSTALL_DIR"
+if ! mkdir -p "$INSTALL_DIR" 2>/dev/null; then
+  need_cmd sudo
+  sudo mkdir -p "$INSTALL_DIR"
+fi
 if [ -w "$INSTALL_DIR" ]; then
-  install -m 0755 "${EXTRACT_DIR}/${TARGET_FILE}" "${INSTALL_DIR}/${TARGET_FILE}"
+  install -m 0755 "$FOUND_BINARY" "${INSTALL_DIR}/${TARGET_FILE}"
 else
-  sudo install -m 0755 "${EXTRACT_DIR}/${TARGET_FILE}" "${INSTALL_DIR}/${TARGET_FILE}"
+  sudo install -m 0755 "$FOUND_BINARY" "${INSTALL_DIR}/${TARGET_FILE}"
 fi
 INSTALLED_PATH="${INSTALL_DIR}/${TARGET_FILE}"
 info "Installed: ${INSTALLED_PATH}"
@@ -202,9 +225,11 @@ if ! is_in_path "$INSTALL_DIR"; then
 
   if [ "$SHELL_NAME" = "fish" ]; then
     printf "    set -U fish_user_paths %s \$fish_user_paths\n" "$INSTALL_DIR"
-    printf "\n  Then, add the following to '%s':\n\n" "$RC_FILE"
-    printf "    # Add gotun completions\n"
-    printf "    source %s\n" "${FISH_COMP_DIR}/gotun.fish"
+    if [ "$NO_COMPLETIONS" -ne 1 ]; then
+      printf "\n  Then, add the following to '%s':\n\n" "$RC_FILE"
+      printf "    # Add gotun completions\n"
+      printf "    source %s\n" "${FISH_COMP_DIR}/gotun.fish"
+    fi
   else
     printf "    echo 'export PATH=\"%s:\$PATH\"' >> %s\n" "$INSTALL_DIR" "$RC_FILE"
     printf "\n  Then, restart your terminal or run:\n\n"

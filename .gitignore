@@ -49,6 +49,13 @@ gui/gui
 gui/gotun
 gui/gotun.exe
 
+# Keep the macOS packaging contract, not generated binaries.
+!gui/build/
+gui/build/*
+!gui/build/darwin/
+gui/build/darwin/*
+!gui/build/darwin/Info.plist
+
 # Temporary directories
 *_temp/
 *_tmp/

@@ -47,7 +47,7 @@ const initialFormData: ProfileFormData = {
   user: '',
   password: '',
   keyFile: '',
-  httpAddr: ':8080',
+  httpAddr: '127.0.0.1:8080',
   socksAddr: '',
   systemProxy: true,
   ruleFile: '',
@@ -560,7 +560,7 @@ const ProfilesPage: React.FC = () => {
                 fullWidth
                 value={formData.httpAddr}
                 onChange={handleChange('httpAddr')}
-                placeholder=":8080"
+                placeholder="127.0.0.1:8080"
               />
               <TextField
                 label={t.profiles.socksAddr}

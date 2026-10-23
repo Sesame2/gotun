@@ -25,6 +25,11 @@ jobs:
       - name: Check formatting
         if: runner.os == 'Linux'
         run: test -z "$(gofmt -l cmd internal gui/*.go gui/internal)"
+      - name: Test release and installer tools
+        if: runner.os == 'Linux'
+        run: |
+          sh -n scripts/install.sh
+          python3 -m unittest discover -s scripts -p 'test_*.py' -v
       - name: Vet
         run: go vet ./cmd/... ./internal/...
       - name: Test with race detection
@@ -38,6 +43,11 @@ jobs:
       fail-fast: false
       matrix:
         os: [macos-latest, windows-latest]
+        include:
+          - os: macos-latest
+            platform: darwin/universal
+          - os: windows-latest
+            platform: windows/amd64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -48,11 +58,17 @@ jobs:
             gui/go.sum
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: npm
           cache-dependency-path: gui/frontend/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Install Wails CLI
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.1
+        shell: bash
+        run: |
+          version=$(cd gui && go list -m -f '{{.Version}}' github.com/wailsapp/wails/v2)
+          go install "github.com/wailsapp/wails/v2/cmd/wails@$version"
       - name: Generate bindings and install frontend dependencies
         run: make gui-bindings frontend-install
       - name: Test frontend
@@ -68,5 +84,4 @@ jobs:
         working-directory: gui
         run: go test -race -count=1 -timeout=120s '-coverprofile=coverage.out' ./...
       - name: Build native GUI
-        working-directory: gui
-        run: wails build -s -skipbindings -m -nosyncgomod
+        run: python scripts/release.py build-gui --version dev --platform ${{ matrix.platform }}

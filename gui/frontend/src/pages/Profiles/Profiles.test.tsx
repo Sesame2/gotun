@@ -18,9 +18,15 @@ async function openNewProfile() {
 }
 
 async function fillRequired(form: ReturnType<typeof within>) {
-  await userEvent.type(form.getByLabelText(/配置名称/), 'My server');
-  await userEvent.type(form.getByLabelText(/SSH主机/), 'ssh.test');
-  await userEvent.type(form.getByLabelText(/^用户名/), 'alice');
+  const user = userEvent.setup();
+  for (const [field, value] of [
+    [form.getByLabelText(/配置名称/), 'My server'],
+    [form.getByLabelText(/SSH主机/), 'ssh.test'],
+    [form.getByLabelText(/^用户名/), 'alice'],
+  ] as const) {
+    await user.click(field);
+    await user.paste(value);
+  }
 }
 
 it('validates required fields before writing and saves a new profile', async () => {
@@ -33,7 +39,7 @@ it('validates required fields before writing and saves a new profile', async () 
   await screen.findByText('配置已添加');
   expect(await screen.findByText('My server')).toBeInTheDocument();
   expect(bridge.app.AddProfile).toHaveBeenCalledWith(expect.objectContaining({
-    name: 'My server', host: 'ssh.test', user: 'alice', port: '22', httpAddr: ':8080',
+    name: 'My server', host: 'ssh.test', user: 'alice', port: '22', httpAddr: '127.0.0.1:8080',
     jumpHosts: [], jumpHostsList: [], tunRoutes: [], tunNAT: [],
   }));
 });
