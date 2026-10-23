@@ -43,7 +43,8 @@ int gotun_tray_start(const void *icon, int length) {
             goTunTrayTarget = [[GoTunTrayTarget alloc] init];
             goTunStatusItem = [[[NSStatusBar systemStatusBar] statusItemWithLength:NSSquareStatusItemLength] retain];
             NSImage *image = [[[NSImage alloc] initWithData:data] autorelease];
-            image.size = NSMakeSize(18, 18);
+            image.size = NSMakeSize(22, 22);
+            image.template = YES;
             goTunStatusItem.button.image = image;
             goTunStatusItem.button.toolTip = @"GoTun";
             [goTunStatusItem.button setAccessibilityLabel:@"GoTun"];

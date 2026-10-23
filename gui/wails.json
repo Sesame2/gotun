@@ -6,6 +6,9 @@
   "frontend:build": "npm run build",
   "frontend:dev:watcher": "npm run dev",
   "frontend:dev:serverUrl": "auto",
+  "preBuildHooks": {
+    "*/*": "node -e \"require('node:fs').copyFileSync('../../frontend/src/assets/images/logo-universal.png', '../appicon.png')\""
+  },
   "author": {
     "name": "Sesame2",
     "email": "gotun@example.com"

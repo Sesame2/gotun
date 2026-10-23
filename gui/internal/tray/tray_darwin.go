@@ -20,7 +20,7 @@ import (
 	"unsafe"
 )
 
-//go:embed icon.png
+//go:embed mole-template.png
 var icon []byte
 var callbackMu sync.RWMutex
 var callback func(string)

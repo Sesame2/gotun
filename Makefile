@@ -277,7 +277,7 @@ gui-package-dmg: gui-build-mac
 	@rm -rf $(GUI_DIR)/build/dmg/GoTun-$(GUI_VERSION).dmg
 	@create-dmg \
 		--volname "GoTun $(GUI_VERSION)" \
-		--volicon "$(GUI_DIR)/build/appicon.png" \
+		--volicon "$(GUI_DIR)/build/bin/GoTun.app/Contents/Resources/iconfile.icns" \
 		--window-pos 200 120 \
 		--window-size 600 400 \
 		--icon-size 100 \
