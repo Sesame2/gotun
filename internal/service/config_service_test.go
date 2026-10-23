@@ -157,9 +157,16 @@ func TestConfigSaveAtomicallyReplacesPrivateFile(t *testing.T) {
 	if err := svc.AddProfile(testProfile()); err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.Stat(svc.configPath)
+	original, err := os.Open(svc.configPath)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// File.Stat captures the identity now; Windows os.Stat loads it lazily by path.
+	before, err := original.Stat()
+	if closeErr := original.Close(); err != nil {
+		t.Fatal(err)
+	} else if closeErr != nil {
+		t.Fatal(closeErr)
 	}
 	settings := svc.GetSettings()
 	settings.Theme = "light"

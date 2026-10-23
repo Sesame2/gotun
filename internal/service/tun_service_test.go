@@ -23,6 +23,11 @@ func TestTunLoggingSettingsKeepFileAndEmitCallbackOnce(t *testing.T) {
 	if err := service.SetLogFile(path); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := service.logger.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	calls := map[string]int{}
 	service.SetLogCallback(func(level, message string) { calls[level+":"+message]++ })
 	service.SetVerbose(true)
