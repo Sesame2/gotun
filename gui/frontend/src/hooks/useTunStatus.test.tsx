@@ -48,7 +48,7 @@ it('refreshes permission changes and recovers from a status error', async () => 
   expect(result.current.needsElevation).toBe(false);
 });
 
-it('polls running status and removes its timer when stopped or unmounted', async () => {
+it('polls stopped state for tray changes and removes its timer when unmounted', async () => {
   bridge.app.GetTunStatus.mockResolvedValue(tunStats({ status: 'running' }));
   const { result, unmount } = renderHook(() => useTunStatus(100));
   await act(async () => {});
@@ -57,9 +57,10 @@ it('polls running status and removes its timer when stopped or unmounted', async
   expect(result.current.tunStatus?.status).toBe('stopped');
   const stoppedCalls = bridge.app.GetTunStatus.mock.calls.length;
   await act(async () => { await vi.advanceTimersByTimeAsync(500); });
-  expect(bridge.app.GetTunStatus).toHaveBeenCalledTimes(stoppedCalls);
+  expect(bridge.app.GetTunStatus.mock.calls.length).toBeGreaterThan(stoppedCalls);
   bridge.app.GetTunStatus.mockResolvedValue(tunStats({ status: 'running' }));
-  await act(async () => { await result.current.refresh(); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+  expect(result.current.tunStatus?.status).toBe('running');
   unmount();
   const calls = bridge.app.GetTunStatus.mock.calls.length;
   await act(async () => { await vi.advanceTimersByTimeAsync(500); });

@@ -331,6 +331,7 @@ func TestLiveHTTPSHarnessUsesSSHConnectAndVerifiesTLSAndHTML(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sshServer := testutil.NewSSHServer(t)
+			testutil.TrustKnownHosts(t, home, sshServer)
 			origin := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.TLS == nil || r.URL.Query().Get("token") != "fixture-secret" {
 					w.WriteHeader(http.StatusBadRequest)
@@ -356,6 +357,7 @@ func TestLiveHTTPSHarnessUsesSSHConnectAndVerifiesTLSAndHTML(t *testing.T) {
 			var jump *testutil.SSHServer
 			if tc.jump != "" {
 				jump = testutil.NewSSHServer(t)
+				testutil.TrustKnownHosts(t, home, jump)
 				jumpHost, jumpPort, err := net.SplitHostPort(jump.Addr)
 				if err != nil {
 					t.Fatal(err)
@@ -393,6 +395,7 @@ func TestLiveHTTPSHarnessProtectsRedirectAuthorization(t *testing.T) {
 	for _, mode := range []string{"same origin", "different HTTPS origin", "HTTP downgrade"} {
 		t.Run(mode, func(t *testing.T) {
 			sshServer := testutil.NewSSHServer(t)
+			testutil.TrustKnownHosts(t, home, sshServer)
 			contacted := make(chan string, 1)
 			destinationHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				contacted <- r.Referer()

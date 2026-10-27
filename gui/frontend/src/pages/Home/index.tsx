@@ -113,6 +113,17 @@ const HomePage: React.FC = () => {
     }
   }, [profiles, selectedProfileId]);
 
+  // Native tray actions share the active configuration with this window.
+  useEffect(() => {
+    const tunActive = tunStatus?.status === 'running' && tunStatus.profileId;
+    const httpActive = status.status === 'running' && status.profileId;
+    const activeId = tunActive || httpActive;
+    if (activeId && profiles.some(profile => profile.id === activeId)) {
+      setSelectedProfileId(activeId);
+      setProxyTab(tunActive ? 1 : 0);
+    }
+  }, [status.status, status.profileId, tunStatus?.status, tunStatus?.profileId, profiles]);
+
   // 保存选中状态
   useEffect(() => {
     if (selectedProfileId) {

@@ -1,4 +1,4 @@
-import { builtinEnvironments } from 'vitest/environments';
+import { builtinEnvironments } from 'vitest/runtime';
 
 const environment: typeof builtinEnvironments.jsdom = {
   ...builtinEnvironments.jsdom,
@@ -9,7 +9,7 @@ const environment: typeof builtinEnvironments.jsdom = {
       delete global[name];
       if (originals[index]) Object.defineProperty(global, name, originals[index]!);
     });
-    // Vitest 0.34 keeps pre-existing Node globals instead of jsdom's browser storage.
+    // Use browser storage even when Node provides its own storage globals.
     storageNames.forEach(name => { delete global[name]; });
     try {
       const jsdom = await builtinEnvironments.jsdom.setup(global, options);

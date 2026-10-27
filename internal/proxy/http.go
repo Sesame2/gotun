@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -90,12 +91,12 @@ func (p *HTTPOverSSH) handlePlainHTTP(w http.ResponseWriter, req *http.Request) 
 	}
 
 	if !req.URL.IsAbs() {
-		p.logger.Warnf("收到非绝对URL请求: %s", req.URL.String())
+		p.logger.Warnf("收到非绝对URL请求: %s", requestURLForLog(req.URL))
 		http.Error(w, "需要绝对URL", http.StatusBadRequest)
 		return
 	}
 
-	p.logger.Infof("来自 %s 的请求: %s %s", req.RemoteAddr, req.Method, req.URL.String())
+	p.logger.Infof("来自 %s 的请求: %s %s", req.RemoteAddr, req.Method, requestURLForLog(req.URL))
 
 	targetAddr := req.URL.Host
 	// 检查是否强制了上游转发
@@ -149,7 +150,15 @@ func (p *HTTPOverSSH) handlePlainHTTP(w http.ResponseWriter, req *http.Request) 
 	}
 
 	duration := time.Since(startTime)
-	p.logger.Infof("请求完成: %s %s - %d (%d bytes) - %v", req.Method, req.URL.String(), resp.StatusCode, written, duration)
+	p.logger.Infof("请求完成: %s %s - %d (%d bytes) - %v", req.Method, requestURLForLog(req.URL), resp.StatusCode, written, duration)
+}
+
+func requestURLForLog(target *url.URL) string {
+	clean := *target
+	clean.User = nil
+	clean.RawQuery, clean.Fragment, clean.RawFragment = "", "", ""
+	clean.ForceQuery = false
+	return clean.String()
 }
 
 // Connection can name additional headers that belong only to this proxy hop.

@@ -10,7 +10,7 @@ it('renders localized navigation, native proxy state, and routes page content', 
   const bridge = installBridge();
   bridge.setSettings(settings({ language: 'en-US' }));
   bridge.app.GetProxyStatus.mockResolvedValue(proxyStats({ status: 'running', uptime: '3m' }));
-  render(<I18nProvider><MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+  render(<I18nProvider><MemoryRouter>
     <Routes><Route element={<Layout />}>
       <Route index element={<p>home content</p>} />
       <Route path="profiles" element={<p>profile content</p>} />
@@ -28,7 +28,7 @@ it('renders localized navigation, native proxy state, and routes page content', 
 
 it('lets keyboard users skip navigation to the focusable main content', async () => {
   installBridge();
-  render(<I18nProvider><MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+  render(<I18nProvider><MemoryRouter>
     <Layout />
   </MemoryRouter></I18nProvider>);
   await userEvent.tab();

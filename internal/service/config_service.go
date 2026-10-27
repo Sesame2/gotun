@@ -1,8 +1,10 @@
 package service
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Sesame2/gotun/internal/config"
+	"github.com/Sesame2/gotun/internal/utils"
 )
 
 // SSHProfile SSH配置文件
@@ -47,14 +50,15 @@ type TunNATRule struct {
 
 // AppSettings 应用设置
 type AppSettings struct {
-	Theme          string `json:"theme"`          // "light" | "dark" | "system"
-	Language       string `json:"language"`       // "zh-CN" | "en-US"
-	AutoStart      bool   `json:"autoStart"`      // 开机自启
-	MinimizeToTray bool   `json:"minimizeToTray"` // 最小化到托盘
-	AutoConnect    bool   `json:"autoConnect"`    // 启动时自动连接
-	DefaultProfile string `json:"defaultProfile"` // 默认配置文件ID
-	Verbose        bool   `json:"verbose"`        // 详细日志
-	LogFile        string `json:"logFile"`        // 日志文件路径
+	SystemProxyMode string `json:"systemProxyMode,omitempty"`
+	Theme           string `json:"theme"`          // "light" | "dark" | "system"
+	Language        string `json:"language"`       // "zh-CN" | "en-US"
+	AutoStart       bool   `json:"autoStart"`      // 开机自启
+	MinimizeToTray  bool   `json:"minimizeToTray"` // 最小化到托盘
+	AutoConnect     bool   `json:"autoConnect"`    // 启动时自动连接
+	DefaultProfile  string `json:"defaultProfile"` // 默认配置文件ID
+	Verbose         bool   `json:"verbose"`        // 详细日志
+	LogFile         string `json:"logFile"`        // 日志文件路径
 }
 
 // ConfigData 配置数据
@@ -68,7 +72,9 @@ type ConfigData struct {
 type ConfigService struct {
 	mu         sync.RWMutex
 	configPath string
+	ownerPath  string
 	data       *ConfigData
+	revision   []byte
 }
 
 // NewConfigService 创建配置服务
@@ -83,6 +89,7 @@ func NewConfigService() (*ConfigService, error) {
 
 	svc := &ConfigService{
 		configPath: configPath,
+		ownerPath:  filepath.Dir(configDir),
 		data: &ConfigData{
 			Version: 1,
 			Settings: AppSettings{
@@ -113,7 +120,7 @@ func getConfigDir() (string, error) {
 	}
 
 	configDir := filepath.Join(homeDir, ".gotun")
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	if err := utils.EnsurePrivateDir(configDir, homeDir); err != nil {
 		return "", fmt.Errorf("无法创建配置目录: %v", err)
 	}
 
@@ -125,7 +132,7 @@ func (s *ConfigService) Load() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	data, err := os.ReadFile(s.configPath)
+	data, err := s.readConfigFile()
 	if err != nil {
 		return err
 	}
@@ -136,7 +143,17 @@ func (s *ConfigService) Load() error {
 	}
 
 	s.data = &cfg
+	s.revision = slices.Clone(data)
 	return nil
+}
+
+func (s *ConfigService) readConfigFile() ([]byte, error) {
+	file, err := utils.OpenPrivateFile(s.configPath, os.O_RDONLY, s.ownerPath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return io.ReadAll(file)
 }
 
 // Save 保存配置
@@ -147,27 +164,28 @@ func (s *ConfigService) Save() error {
 }
 
 func (s *ConfigService) saveLocked() error {
+	unlock, err := lockConfigFile(s.configPath+".lock", s.ownerPath)
+	if err != nil {
+		return fmt.Errorf("锁定配置文件失败: %w", err)
+	}
+	defer unlock()
+	current, err := s.readConfigFile()
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("读取当前配置失败: %w", err)
+	}
+	if !bytes.Equal(current, s.revision) {
+		return fmt.Errorf("配置已被其他实例修改，请重新加载后重试")
+	}
 	data, err := json.MarshalIndent(s.data, "", "  ")
 	if err != nil {
 		return fmt.Errorf("序列化配置失败: %v", err)
 	}
 
-	file, err := os.OpenFile(s.configPath, os.O_WRONLY|os.O_CREATE, 0600)
-	if err != nil {
-		return fmt.Errorf("写入配置文件失败: %v", err)
+	if err := utils.AtomicWritePrivateFile(s.configPath, data, s.ownerPath); err != nil {
+		return fmt.Errorf("替换配置文件失败: %w", err)
 	}
-	defer file.Close()
-	// Existing configurations may still have the old world-readable permissions.
-	if err := file.Chmod(0600); err != nil {
-		return fmt.Errorf("设置配置文件权限失败: %v", err)
-	}
-	if err := file.Truncate(0); err != nil {
-		return fmt.Errorf("写入配置文件失败: %v", err)
-	}
-	if _, err := file.Write(data); err != nil {
-		return fmt.Errorf("写入配置文件失败: %v", err)
-	}
-	return file.Close()
+	s.revision = slices.Clone(data)
+	return nil
 }
 
 // GetSettings 获取应用设置
@@ -179,6 +197,11 @@ func (s *ConfigService) GetSettings() AppSettings {
 
 // UpdateSettings 更新应用设置
 func (s *ConfigService) UpdateSettings(settings AppSettings) error {
+	switch settings.SystemProxyMode {
+	case "", "follow-profile", "auto", "manual":
+	default:
+		return fmt.Errorf("无效的系统代理模式: %s", settings.SystemProxyMode)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	previous := s.data.Settings
@@ -226,6 +249,7 @@ func (s *ConfigService) GetProfile(id string) (*SSHProfile, error) {
 // AddProfile 添加配置文件
 func (s *ConfigService) AddProfile(profile SSHProfile) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	// 生成ID
 	if profile.ID == "" {
@@ -235,7 +259,6 @@ func (s *ConfigService) AddProfile(profile SSHProfile) error {
 	// 检查重复
 	for _, p := range s.data.Profiles {
 		if p.ID == profile.ID {
-			s.mu.Unlock()
 			return fmt.Errorf("配置文件ID已存在: %s", profile.ID)
 		}
 	}
@@ -250,62 +273,75 @@ func (s *ConfigService) AddProfile(profile SSHProfile) error {
 		profile.Port = "22"
 	}
 	if profile.HTTPAddr == "" {
-		profile.HTTPAddr = ":8080"
+		profile.HTTPAddr = "127.0.0.1:8080"
 	}
 
+	previous := slices.Clone(s.data.Profiles)
 	s.data.Profiles = append(s.data.Profiles, cloneProfile(profile))
-
-	s.mu.Unlock()
-	return s.Save()
+	if err := s.saveLocked(); err != nil {
+		s.data.Profiles = previous
+		return err
+	}
+	return nil
 }
 
 // UpdateProfile 更新配置文件
 func (s *ConfigService) UpdateProfile(profile SSHProfile) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	for i, p := range s.data.Profiles {
 		if p.ID == profile.ID {
 			profile.CreatedAt = p.CreatedAt
 			profile.UpdatedAt = time.Now()
 			s.data.Profiles[i] = cloneProfile(profile)
-			s.mu.Unlock()
-			return s.Save()
+			if err := s.saveLocked(); err != nil {
+				s.data.Profiles[i] = p
+				return err
+			}
+			return nil
 		}
 	}
 
-	s.mu.Unlock()
 	return fmt.Errorf("配置文件不存在: %s", profile.ID)
 }
 
 // DeleteProfile 删除配置文件
 func (s *ConfigService) DeleteProfile(id string) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	for i, p := range s.data.Profiles {
 		if p.ID == id {
+			previous := slices.Clone(s.data.Profiles)
 			s.data.Profiles = append(s.data.Profiles[:i], s.data.Profiles[i+1:]...)
-			s.mu.Unlock()
-			return s.Save()
+			if err := s.saveLocked(); err != nil {
+				s.data.Profiles = previous
+				return err
+			}
+			return nil
 		}
 	}
 
-	s.mu.Unlock()
 	return fmt.Errorf("配置文件不存在: %s", id)
 }
 
 // SetLastUsed 设置最后使用时间
 func (s *ConfigService) SetLastUsed(id string) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	for i, p := range s.data.Profiles {
 		if p.ID == id {
 			s.data.Profiles[i].LastUsedAt = time.Now()
-			s.mu.Unlock()
-			return s.Save()
+			if err := s.saveLocked(); err != nil {
+				s.data.Profiles[i] = p
+				return err
+			}
+			return nil
 		}
 	}
 
-	s.mu.Unlock()
 	return nil
 }
 

@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, expect, it } from 'vitest';
+import { beforeEach, expect, it, vi } from 'vitest';
 import HomePage from './index';
 import { I18nProvider } from '../../providers/I18nProvider';
 import { deferred, installBridge, profile, proxyStats, settings, tunStats } from '../../test/bridge';
@@ -19,12 +19,16 @@ it('selects the first profile, remembers it, and starts and stops HTTP proxy', a
   const start = await screen.findByRole('button', { name: '启动' });
   await waitFor(() => expect(start).toBeEnabled());
   expect(localStorage.getItem('gotun_last_profile_id')).toBe('office');
-  bridge.app.GetProxyStatus.mockResolvedValue(proxyStats({ status: 'running', uptime: '10s' }));
+  bridge.app.StartProxy.mockImplementationOnce(async () => {
+    bridge.app.GetProxyStatus.mockResolvedValue(proxyStats({ status: 'running', uptime: '10s' }));
+  });
   await userEvent.click(start);
   await screen.findByText('代理服务已启动');
   expect(bridge.app.StartProxy).toHaveBeenCalledWith('office');
   expect(await screen.findByRole('button', { name: '停止' })).toBeEnabled();
-  bridge.app.GetProxyStatus.mockResolvedValue(proxyStats());
+  bridge.app.StopProxy.mockImplementationOnce(async () => {
+    bridge.app.GetProxyStatus.mockResolvedValue(proxyStats());
+  });
   await userEvent.click(screen.getByRole('button', { name: '停止' }));
   await screen.findByText('代理服务已停止');
   expect(bridge.app.StopProxy).toHaveBeenCalledTimes(1);
@@ -65,6 +69,7 @@ it('requests confirmation before elevation and never starts TUN without it', asy
 });
 
 it('runs TUN as admin, disables HTTP while active, and stops TUN', async () => {
+  const intervals = vi.spyOn(globalThis, 'setInterval');
   bridge.setProfiles([profile({ tunMode: true })]);
   bridge.app.IsRunningAsAdmin.mockResolvedValue(true);
   bridge.app.RequiresTunElevation.mockResolvedValue(false);
@@ -72,15 +77,26 @@ it('runs TUN as admin, disables HTTP while active, and stops TUN', async () => {
   const tab = screen.getByRole('tab', { name: 'TUN模式' });
   await waitFor(() => expect(tab).toBeEnabled());
   await userEvent.click(tab);
-  bridge.app.GetTunStatus.mockResolvedValue(tunStats({ status: 'running', tunDevice: 'utun9', tunIP: '10.0.0.1', isGlobal: true }));
+  bridge.app.StartTunProxy.mockImplementationOnce(async () => {
+    bridge.app.GetTunStatus.mockResolvedValue(tunStats({ status: 'running', tunDevice: 'utun9', tunIP: '10.0.0.1', isGlobal: true }));
+  });
+  bridge.app.StopTunProxy.mockImplementationOnce(async () => {
+    bridge.app.GetTunStatus.mockResolvedValue(tunStats());
+  });
+  await waitFor(() => expect(screen.getByRole('button', { name: '启动TUN' })).toBeEnabled());
   await userEvent.click(screen.getByRole('button', { name: '启动TUN' }));
   await screen.findByText('TUN代理服务已启动');
   expect(await screen.findByText('utun9')).toBeInTheDocument();
   await userEvent.click(screen.getByRole('tab', { name: 'HTTP/SOCKS5' }));
   expect(screen.getByRole('button', { name: '启动' })).toBeDisabled();
   await userEvent.click(tab);
-  bridge.app.GetTunStatus.mockResolvedValue(tunStats());
-  await userEvent.click(screen.getByRole('button', { name: '停止TUN' }));
+  const stop = screen.getByRole('button', { name: '停止TUN' });
+  // Exercise the real poll between locating the control and dispatching its click.
+  const poll = intervals.mock.calls.find(([, period]) => period === 2000)![0] as () => Promise<void>;
+  await act(async () => { await poll(); });
+  await waitFor(() => expect(stop).toBeEnabled());
+  await userEvent.click(stop);
+  expect(bridge.app.StopTunProxy).toHaveBeenCalledTimes(1);
   await screen.findByText('TUN代理服务已停止');
 });
 
@@ -186,15 +202,23 @@ it('renders all Home details in the saved English locale', async () => {
 });
 
 it('tests a connection, closes the result alert, and supports retry', async () => {
+  // Hover/tooltips have their own test; this case covers request and alert state.
+  const user = userEvent.setup({ skipHover: true });
+  const pending = deferred<void>();
+  bridge.app.TestConnection.mockReturnValueOnce(pending.promise);
   bridge.setProfiles([profile()]);
   renderHome();
   const test = screen.getByRole('button', { name: '测试连接' });
   await waitFor(() => expect(test).toBeEnabled());
-  await userEvent.click(test);
+  await user.click(test);
+  expect(test).toBeDisabled();
+  expect(test).toHaveAttribute('aria-busy', 'true');
+  await act(async () => { pending.resolve(); });
   await screen.findByText('SSH连接测试成功');
-  await userEvent.click(screen.getByRole('button', { name: '关闭' }));
+  await waitFor(() => expect(test).toBeEnabled());
+  await user.click(screen.getByRole('button', { name: '关闭' }));
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-  await userEvent.click(test);
+  await user.click(test);
   expect(bridge.app.TestConnection).toHaveBeenCalledTimes(2);
 });
 
@@ -263,4 +287,20 @@ it('keeps the global TUN stop action reachable when the selected profile has TUN
   await userEvent.click(screen.getByRole('button', { name: '停止TUN' }));
   await screen.findByText('TUN代理服务已停止');
   expect(bridge.app.StopTunProxy).toHaveBeenCalledTimes(1);
+});
+
+it('reflects a profile activated from the native tray', async () => {
+  bridge.setProfiles([profile(), profile({ id: 'remote', name: 'From Tray' })]);
+  bridge.app.GetProxyStatus.mockResolvedValue(proxyStats({ status: 'running', profileId: 'remote' }));
+  renderHome();
+  await waitFor(() => expect(screen.getByRole('combobox', { name: '选择配置' })).toHaveTextContent('From Tray'));
+  expect(localStorage.getItem('gotun_last_profile_id')).toBe('remote');
+});
+
+it('reflects the tray TUN profile and opens its active panel', async () => {
+  bridge.setProfiles([profile(), profile({ id: 'tun-tray', name: 'Tray TUN', tunMode: true })]);
+  bridge.app.GetTunStatus.mockResolvedValue(tunStats({ status: 'running', profileId: 'tun-tray' }));
+  renderHome();
+  await waitFor(() => expect(screen.getByRole('combobox', { name: '选择配置' })).toHaveTextContent('Tray TUN'));
+  expect(screen.getByRole('tab', { name: 'TUN模式' })).toHaveAttribute('aria-selected', 'true');
 });

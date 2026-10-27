@@ -20,12 +20,14 @@ import (
 
 	"github.com/Sesame2/gotun/internal/config"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 type SSHServer struct {
-	Addr      string
-	KeyFile   string
-	forwarded atomic.Int64
+	Addr           string
+	KeyFile        string
+	KnownHostsFile string
+	forwarded      atomic.Int64
 }
 
 // NewSSHServer accepts password/key authentication and direct-tcpip forwarding.
@@ -68,6 +70,11 @@ func NewSSHServer(t testing.TB) *SSHServer {
 		t.Fatal(err)
 	}
 	s.Addr = listener.Addr().String()
+	s.KnownHostsFile = filepath.Join(t.TempDir(), "known_hosts")
+	if err := os.WriteFile(s.KnownHostsFile, []byte(knownhosts.Line([]string{s.Addr}, signer.PublicKey())+"\n"), 0600); err != nil {
+		listener.Close()
+		t.Fatal(err)
+	}
 	var mu sync.Mutex
 	connections := make(map[net.Conn]bool)
 	closing := false
@@ -193,6 +200,7 @@ func (s *SSHServer) Config() *config.Config {
 	cfg.SSHUser = "tester"
 	cfg.SSHPassword = "test-password"
 	cfg.SSHKeyFile = s.KeyFile
+	cfg.KnownHostsFile = s.KnownHostsFile
 	cfg.InteractiveAuth = false
 	cfg.SystemProxy = false
 	cfg.ListenAddr = "127.0.0.1:0"

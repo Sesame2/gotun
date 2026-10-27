@@ -18,12 +18,14 @@ var (
 )
 
 func main() {
+	prepareElevationHome()
 	// Create an instance of the app structure
 	app := NewApp()
 
 	// Create application with options
 	err := wails.Run(&options.App{
 		Title:             "GoTun",
+		Menu:              app.applicationMenu(),
 		Width:             1024,
 		Height:            700,
 		MinWidth:          800,
@@ -38,6 +40,8 @@ func main() {
 		},
 		BackgroundColour: &options.RGBA{R: 30, G: 31, B: 39, A: 1},
 		OnStartup:        app.startup,
+		OnDomReady:       app.startTray,
+		OnBeforeClose:    app.beforeClose,
 		OnShutdown:       app.shutdown,
 		Bind: []interface{}{
 			app,

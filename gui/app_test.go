@@ -62,7 +62,7 @@ func TestAppConfigurationAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	profiles := app.GetProfiles()
-	if len(profiles) != 1 || profiles[0].Port != "22" || profiles[0].HTTPAddr != ":8080" {
+	if len(profiles) != 1 || profiles[0].Port != "22" || profiles[0].HTTPAddr != "127.0.0.1:8080" {
 		t.Fatalf("unexpected profiles: %+v", profiles)
 	}
 	profiles[0].Name = "Local only"
@@ -182,6 +182,7 @@ func TestAppInvalidProfiles(t *testing.T) {
 func TestAppSSHConnectionChecks(t *testing.T) {
 	app := newTestApp(t)
 	server := testutil.NewSSHServer(t)
+	testutil.TrustKnownHosts(t, os.Getenv("HOME"), server)
 	host, port, err := net.SplitHostPort(server.Addr)
 	if err != nil {
 		t.Fatal(err)
@@ -220,6 +221,7 @@ func TestAppSSHConnectionChecks(t *testing.T) {
 func TestAppProxyLifecyclePersistsLastUsed(t *testing.T) {
 	app := newTestApp(t)
 	server := testutil.NewSSHServer(t)
+	testutil.TrustKnownHosts(t, os.Getenv("HOME"), server)
 	host, port, err := net.SplitHostPort(server.Addr)
 	if err != nil {
 		t.Fatal(err)

@@ -2,10 +2,13 @@
   "$schema": "https://wails.io/schemas/config.v2.json",
   "name": "GoTun",
   "outputfilename": "gotun",
-  "frontend:install": "npm install",
+  "frontend:install": "npm ci --no-audit --no-fund",
   "frontend:build": "npm run build",
   "frontend:dev:watcher": "npm run dev",
   "frontend:dev:serverUrl": "auto",
+  "preBuildHooks": {
+    "*/*": "node -e \"require('node:fs').copyFileSync('../../frontend/src/assets/images/logo-universal.png', '../appicon.png')\""
+  },
   "author": {
     "name": "Sesame2",
     "email": "gotun@example.com"
@@ -13,7 +16,7 @@
   "info": {
     "companyName": "GoTun",
     "productName": "GoTun",
-    "productVersion": "1.0.0",
+    "productVersion": "0.0.0",
     "copyright": "Copyright © 2024 Sesame2",
     "comments": "基于SSH的轻量级HTTP代理工具"
   }

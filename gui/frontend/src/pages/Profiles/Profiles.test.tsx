@@ -18,9 +18,15 @@ async function openNewProfile() {
 }
 
 async function fillRequired(form: ReturnType<typeof within>) {
-  await userEvent.type(form.getByLabelText(/配置名称/), 'My server');
-  await userEvent.type(form.getByLabelText(/SSH主机/), 'ssh.test');
-  await userEvent.type(form.getByLabelText(/^用户名/), 'alice');
+  const user = userEvent.setup();
+  for (const [field, value] of [
+    [form.getByLabelText(/配置名称/), 'My server'],
+    [form.getByLabelText(/SSH主机/), 'ssh.test'],
+    [form.getByLabelText(/^用户名/), 'alice'],
+  ] as const) {
+    await user.click(field);
+    await user.paste(value);
+  }
 }
 
 it('validates required fields before writing and saves a new profile', async () => {
@@ -33,29 +39,35 @@ it('validates required fields before writing and saves a new profile', async () 
   await screen.findByText('配置已添加');
   expect(await screen.findByText('My server')).toBeInTheDocument();
   expect(bridge.app.AddProfile).toHaveBeenCalledWith(expect.objectContaining({
-    name: 'My server', host: 'ssh.test', user: 'alice', port: '22', httpAddr: ':8080',
+    name: 'My server', host: 'ssh.test', user: 'alice', port: '22', httpAddr: '127.0.0.1:8080',
     jumpHosts: [], jumpHostsList: [], tunRoutes: [], tunNAT: [],
   }));
 });
 
 it('saves structured jump hosts, routes and NAT rules through the native payload', async () => {
+  const user = userEvent.setup();
   renderProfiles();
   const form = await openNewProfile();
   await fillRequired(form);
-  await userEvent.click(form.getByRole('switch', { name: '启用跳板机' }));
-  await userEvent.type(form.getByLabelText(/主机地址/), 'jump.test');
-  await userEvent.type(form.getAllByLabelText(/^用户名/)[1], 'bastion');
+  await user.click(form.getByRole('switch', { name: '启用跳板机' }));
+  await user.click(form.getByLabelText(/主机地址/));
+  await user.paste('jump.test');
+  await user.click(form.getAllByLabelText(/^用户名/)[1]);
+  await user.paste('bastion');
   const jumpPort = form.getAllByLabelText(/^端口/)[1];
-  await userEvent.clear(jumpPort);
-  await userEvent.type(jumpPort, '2222');
-  await userEvent.click(form.getByRole('switch', { name: /启用 TUN/ }));
-  await userEvent.click(form.getByRole('button', { name: '添加路由' }));
-  await userEvent.type(form.getByPlaceholderText('例如: 192.168.1.0/24'), '192.168.50.0/24');
-  await userEvent.click(form.getByRole('button', { name: '添加路由' }));
-  await userEvent.click(form.getByRole('button', { name: '添加 NAT 规则' }));
-  await userEvent.type(form.getByPlaceholderText('本地 CIDR (如 10.0.0.0/24)'), '10.10.0.0/24');
-  await userEvent.type(form.getByPlaceholderText('远程 CIDR (如 192.168.0.0/24)'), '192.168.0.0/24');
-  await userEvent.click(form.getByRole('button', { name: '保存' }));
+  await user.clear(jumpPort);
+  await user.paste('2222');
+  await user.click(form.getByRole('switch', { name: /启用 TUN/ }));
+  await user.click(form.getByRole('button', { name: '添加路由' }));
+  await user.click(form.getByPlaceholderText('例如: 192.168.1.0/24'));
+  await user.paste('192.168.50.0/24');
+  await user.click(form.getByRole('button', { name: '添加路由' }));
+  await user.click(form.getByRole('button', { name: '添加 NAT 规则' }));
+  await user.click(form.getByPlaceholderText('本地 CIDR (如 10.0.0.0/24)'));
+  await user.paste('10.10.0.0/24');
+  await user.click(form.getByPlaceholderText('远程 CIDR (如 192.168.0.0/24)'));
+  await user.paste('192.168.0.0/24');
+  await user.click(form.getByRole('button', { name: '保存' }));
   await screen.findByText('配置已添加');
   expect(bridge.app.AddProfile).toHaveBeenCalledWith(expect.objectContaining({
     jumpHosts: ['bastion@jump.test:2222'],

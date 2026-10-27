@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +19,45 @@ import (
 	"github.com/Sesame2/gotun/internal/router"
 	"github.com/Sesame2/gotun/internal/testutil"
 )
+
+func TestHTTPLogsExcludeURLSecrets(t *testing.T) {
+	server := testutil.NewSSHServer(t)
+	cfg := server.Config()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
+	defer origin.Close()
+	log := logger.NewLogger(false)
+	var mu sync.Mutex
+	var messages []string
+	log.SetCallback(func(_ string, message string) { mu.Lock(); messages = append(messages, message); mu.Unlock() })
+	sshClient, err := NewSSHClient(cfg, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sshClient.Close()
+	p, err := NewHTTPOverSSH(cfg, log, sshClient, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	proxy := httptest.NewServer(http.HandlerFunc(p.handleHTTP))
+	defer proxy.Close()
+	target := strings.Replace(origin.URL, "127.0.0.1", "remote.test", 1) + "/login?code=SYNTHETIC_AUTH_TOKEN"
+	resp, err := proxyHTTPClient(t, proxy.URL).Get(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	mu.Lock()
+	defer mu.Unlock()
+	joined := strings.Join(messages, "\n")
+	if strings.Contains(joined, "SYNTHETIC_AUTH_TOKEN") || strings.Contains(joined, "?code=") {
+		t.Fatalf("URL query leaked into proxy logs: %s", joined)
+	}
+	if !strings.Contains(joined, "/login") {
+		t.Fatalf("request path missing from useful logs: %s", joined)
+	}
+}
 
 func testRouter(t *testing.T, rules string) *router.Router {
 	t.Helper()
